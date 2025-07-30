@@ -121,6 +121,8 @@ type radarData struct {
 	station     string
 	lastUpdated time.Time
 	isRealData  bool // Track if this is real or simulated data
+	temperature int  // Current temperature in Fahrenheit
+	conditions  string // Current weather conditions
 }
 
 type radarFrame struct {
@@ -443,42 +445,42 @@ func (m model) renderInfoPanel() string {
 	location := locationStyle.Render(fmt.Sprintf("📍 %s", m.radar.location))
 	station := stationStyle.Render(fmt.Sprintf("📡 Station: %s", m.radar.station))
 	
-	// Show frame timestamp to see movement
+	// Temperature display
+	tempDisplay := ""
+	if m.radar.temperature != 0 {
+		tempDisplay = fmt.Sprintf("%d°F", m.radar.temperature)
+		// Color code temperature
+		tempColor := lipgloss.Color("87") // Default cyan
+		if m.radar.temperature >= 90 {
+			tempColor = lipgloss.Color("196") // Red
+		} else if m.radar.temperature >= 70 {
+			tempColor = lipgloss.Color("214") // Orange
+		} else if m.radar.temperature >= 50 {
+			tempColor = lipgloss.Color("226") // Yellow
+		} else if m.radar.temperature >= 32 {
+			tempColor = lipgloss.Color("87") // Cyan
+		} else {
+			tempColor = lipgloss.Color("51") // Light blue
+		}
+		tempDisplay = lipgloss.NewStyle().Foreground(tempColor).Bold(true).Render(tempDisplay)
+	}
+	
+	// Weather condition emoji
+	conditionEmoji := getWeatherEmoji(m.radar.conditions)
+	
+	// Show frame timestamp info
 	var frameInfo string
 	if len(m.radar.frames) > 0 && m.currentFrame < len(m.radar.frames) {
 		frame := m.radar.frames[m.currentFrame]
 		timeAgo := time.Since(frame.timestamp).Round(time.Minute)
 		frameInfo = fmt.Sprintf("Frame %d/%d (%s ago)", 
 			m.currentFrame+1, len(m.radar.frames), timeAgo)
-		
-		// Add product type if available
-		if frame.product != "" {
-			frameInfo += fmt.Sprintf(" [%s]", frame.product)
-		}
 	} else {
 		frameInfo = fmt.Sprintf("Frame %d/%d", m.currentFrame+1, len(m.radar.frames))
 	}
 	
 	if m.isPaused {
 		frameInfo += " (PAUSED)"
-	}
-	
-	// Add data source indicator with more detail
-	var dataSource string
-	if m.radar.isRealData {
-		dataSource = lipgloss.NewStyle().
-			Foreground(successColor).
-			Render(" ✓ Live Radar")
-		// Add source info
-		if len(m.radar.frames) > 0 && m.radar.frames[0].product != "" {
-			dataSource += lipgloss.NewStyle().
-				Foreground(lipgloss.Color("245")).
-				Render(fmt.Sprintf(" (NEXRAD %s)", m.radar.frames[0].product))
-		}
-	} else {
-		dataSource = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214")).
-			Render(" ⚠️  Simulated Data")
 	}
 	
 	// Add last refresh time
@@ -492,17 +494,24 @@ func (m model) renderInfoPanel() string {
 		}
 	}
 	
-	info := lipgloss.JoinHorizontal(lipgloss.Top,
-		location,
-		strings.Repeat(" ", 4),
-		station,
-		strings.Repeat(" ", 4),
-		frameInfo,
-		dataSource,
-		refreshInfo,
-	)
+	// Build the info line
+	infoItems := []string{location, station}
 	
-	return infoPanelStyle.Render(info)
+	if tempDisplay != "" {
+		infoItems = append(infoItems, tempDisplay)
+	}
+	
+	if conditionEmoji != "" {
+		infoItems = append(infoItems, conditionEmoji)
+	}
+	
+	// Add frame info on a separate line
+	topLine := strings.Join(infoItems, strings.Repeat(" ", 4))
+	bottomLine := helpStyle.Render(frameInfo + refreshInfo)
+	
+	return infoPanelStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Left, topLine, bottomLine),
+	)
 }
 
 func (m model) renderRadarFrame() string {
@@ -806,6 +815,51 @@ func (m model) resetToInput() model {
 	return m
 }
 
+// getWeatherEmoji returns an emoji based on weather conditions
+func getWeatherEmoji(conditions string) string {
+	if conditions == "" {
+		return ""
+	}
+	
+	// Convert to lowercase for easier matching
+	cond := strings.ToLower(conditions)
+	
+	// Check for various weather conditions
+	switch {
+	case strings.Contains(cond, "thunder") || strings.Contains(cond, "storm"):
+		return "⛈️"
+	case strings.Contains(cond, "snow") || strings.Contains(cond, "blizzard"):
+		return "🌨️"
+	case strings.Contains(cond, "rain") || strings.Contains(cond, "shower"):
+		if strings.Contains(cond, "heavy") {
+			return "🌧️"
+		}
+		return "🌦️"
+	case strings.Contains(cond, "drizzle") || strings.Contains(cond, "mist"):
+		return "🌫️"
+	case strings.Contains(cond, "cloud"):
+		if strings.Contains(cond, "partly") || strings.Contains(cond, "few") {
+			return "⛅"
+		}
+		return "☁️"
+	case strings.Contains(cond, "clear") || strings.Contains(cond, "sunny"):
+		// Check time of day (very basic check)
+		hour := time.Now().Hour()
+		if hour >= 6 && hour < 18 {
+			return "☀️"
+		}
+		return "🌙"
+	case strings.Contains(cond, "fog"):
+		return "🌫️"
+	case strings.Contains(cond, "wind"):
+		return "💨"
+	case strings.Contains(cond, "hail"):
+		return "🌨️"
+	default:
+		return "🌤️" // Default partly cloudy
+	}
+}
+
 // Animation commands
 func (m model) animateFrame() tea.Cmd {
 	return tea.Tick(m.frameRate, func(t time.Time) tea.Msg {
@@ -846,6 +900,9 @@ func loadRadarData(zipCode string) tea.Cmd {
 			return errorMsg{err: fmt.Errorf("failed to get radar station: %w", err)}
 		}
 
+		// Fetch current weather
+		temperature, conditions := fetchCurrentWeather(lat, lon)
+
 		// Fetch real radar data
 		frames, isRealData, err := fetchRealRadarData(station, lat, lon)
 		if err != nil {
@@ -863,6 +920,8 @@ func loadRadarData(zipCode string) tea.Cmd {
 				station:     station,
 				lastUpdated: time.Now(),
 				isRealData:  isRealData,
+				temperature: temperature,
+				conditions:  conditions,
 			},
 		}
 	}
@@ -1356,6 +1415,103 @@ func getNWSRadarStation(lat, lon float64) (string, error) {
 	}
 
 	return nearest, nil
+}
+
+// fetchCurrentWeather fetches current weather from NWS API
+func fetchCurrentWeather(lat, lon float64) (int, string) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	
+	// First get the grid endpoint for this location
+	pointURL := fmt.Sprintf("https://api.weather.gov/points/%.4f,%.4f", lat, lon)
+	
+	resp, err := client.Get(pointURL)
+	if err != nil {
+		log.Printf("Failed to get NWS point data: %v", err)
+		return 0, ""
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("NWS point API returned status: %d", resp.StatusCode)
+		return 0, ""
+	}
+	
+	var pointData struct {
+		Properties struct {
+			ForecastURL    string `json:"forecast"`
+			ObservationURL string `json:"observationStations"`
+		} `json:"properties"`
+	}
+	
+	if err := json.NewDecoder(resp.Body).Decode(&pointData); err != nil {
+		log.Printf("Failed to decode NWS point data: %v", err)
+		return 0, ""
+	}
+	
+	// Get the observation stations
+	stationsResp, err := client.Get(pointData.Properties.ObservationURL)
+	if err != nil {
+		log.Printf("Failed to get observation stations: %v", err)
+		return 0, ""
+	}
+	defer stationsResp.Body.Close()
+	
+	var stationsData struct {
+		Features []struct {
+			Properties struct {
+				StationIdentifier string `json:"stationIdentifier"`
+			} `json:"properties"`
+		} `json:"features"`
+	}
+	
+	if err := json.NewDecoder(stationsResp.Body).Decode(&stationsData); err != nil {
+		log.Printf("Failed to decode stations data: %v", err)
+		return 0, ""
+	}
+	
+	if len(stationsData.Features) == 0 {
+		log.Printf("No observation stations found")
+		return 0, ""
+	}
+	
+	// Get latest observation from the first station
+	stationID := stationsData.Features[0].Properties.StationIdentifier
+	obsURL := fmt.Sprintf("https://api.weather.gov/stations/%s/observations/latest", stationID)
+	
+	obsResp, err := client.Get(obsURL)
+	if err != nil {
+		log.Printf("Failed to get observations: %v", err)
+		return 0, ""
+	}
+	defer obsResp.Body.Close()
+	
+	var obsData struct {
+		Properties struct {
+			Temperature struct {
+				Value float64 `json:"value"`
+				UnitCode string `json:"unitCode"`
+			} `json:"temperature"`
+			TextDescription string `json:"textDescription"`
+		} `json:"properties"`
+	}
+	
+	if err := json.NewDecoder(obsResp.Body).Decode(&obsData); err != nil {
+		log.Printf("Failed to decode observation data: %v", err)
+		return 0, ""
+	}
+	
+	// Convert temperature to Fahrenheit if needed
+	temp := obsData.Properties.Temperature.Value
+	if obsData.Properties.Temperature.UnitCode == "wmoUnit:degC" {
+		temp = temp*9/5 + 32
+	}
+	
+	conditions := obsData.Properties.TextDescription
+	if conditions == "" {
+		conditions = "Clear" // Default condition
+	}
+	
+	return int(temp), conditions
 }
 
 func main() {
