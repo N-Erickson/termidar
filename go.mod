@@ -1,4 +1,4 @@
-module github.com/N-Erickson/termiradar
+module github.com/N-Erickson/termidar
 
 go 1.24.2
 
