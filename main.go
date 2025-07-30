@@ -6,6 +6,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	"image/png"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -21,9 +22,9 @@ import (
 
 // Constants
 const (
-	radarWidth  = 50
-	radarHeight = 25
-	maxFrames   = 12
+	radarWidth  = 60
+	radarHeight = 30
+	maxFrames   = 20  // Increased from 12 to get more animation frames
 )
 
 // Styles
@@ -141,11 +142,6 @@ type model struct {
 	height       int
 	errorMsg     string
 	
-	// Animation states
-	sweepAngle   float64
-	pulseRadius  float64
-	particles    []particle
-	
 	// UI state
 	showHelp     bool
 	isPaused     bool
@@ -169,7 +165,6 @@ type particle struct {
 // Messages
 type tickMsg time.Time
 type frameTickMsg time.Time
-type sweepTickMsg time.Time
 type refreshTickMsg time.Time
 type radarLoadedMsg struct {
 	radar radarData
@@ -205,18 +200,14 @@ func initialModel() model {
 		progress:    p,
 		width:       80,
 		height:      40,
-		frameRate:   500 * time.Millisecond,
-		particles:   make([]particle, 0),
+		frameRate:   300 * time.Millisecond, // Faster for smoother animation
 		autoRefresh: true,
 	}
 }
 
 // Init initializes the model
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
-		textinput.Blink,
-		m.animateSweep(),
-	)
+	return textinput.Blink
 }
 
 // Update handles messages
@@ -318,21 +309,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case frameTickMsg:
 		if m.state == stateDisplaying && !m.isPaused && len(m.radar.frames) > 0 {
 			m.currentFrame = (m.currentFrame + 1) % len(m.radar.frames)
-			m.generateParticles()
 			cmds = append(cmds, m.animateFrame())
 		}
-
-	case sweepTickMsg:
-		m.sweepAngle += 5
-		if m.sweepAngle >= 360 {
-			m.sweepAngle = 0
-		}
-		m.pulseRadius += 0.5
-		if m.pulseRadius > float64(radarWidth/2) {
-			m.pulseRadius = 0
-		}
-		m.updateParticles()
-		cmds = append(cmds, m.animateSweep())
 
 	case errorMsg:
 		m.state = stateError
@@ -452,6 +430,11 @@ func (m model) renderInfoPanel() string {
 		timeAgo := time.Since(frame.timestamp).Round(time.Minute)
 		frameInfo = fmt.Sprintf("Frame %d/%d (%s ago)", 
 			m.currentFrame+1, len(m.radar.frames), timeAgo)
+		
+		// Add product type if available
+		if frame.product != "" {
+			frameInfo += fmt.Sprintf(" [%s]", frame.product)
+		}
 	} else {
 		frameInfo = fmt.Sprintf("Frame %d/%d", m.currentFrame+1, len(m.radar.frames))
 	}
@@ -460,12 +443,18 @@ func (m model) renderInfoPanel() string {
 		frameInfo += " (PAUSED)"
 	}
 	
-	// Add data source indicator
+	// Add data source indicator with more detail
 	var dataSource string
 	if m.radar.isRealData {
 		dataSource = lipgloss.NewStyle().
 			Foreground(successColor).
 			Render(" ✓ Live Radar")
+		// Add source info
+		if len(m.radar.frames) > 0 && m.radar.frames[0].product != "" {
+			dataSource += lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245")).
+				Render(fmt.Sprintf(" (NEXRAD %s)", m.radar.frames[0].product))
+		}
 	} else {
 		dataSource = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214")).
@@ -508,20 +497,22 @@ func (m model) renderRadarFrame() string {
 		}
 	}
 	
-	// Draw radar circles
+	// Get center coordinates from the radar station
 	centerX, centerY := radarWidth/2, radarHeight/2
-	m.drawRadarCircles(display, centerX, centerY)
 	
-	// Draw sweep line
-	m.drawSweepLine(display, centerX, centerY)
+	// Draw geographic boundaries FIRST (so radar data appears on top)
+	m.drawGeographicBoundaries(display, centerX, centerY)
 	
-	// Draw precipitation data
+	// Draw simple distance markers instead of animated radar circles
+	m.drawDistanceMarkers(display, centerX, centerY)
+	
+	// Draw precipitation data - this is the actual radar data
 	if frame.data != nil {
 		m.drawPrecipitation(display, frame.data)
 	}
 	
-	// Draw particles
-	m.drawParticles(display)
+	// Add scale indicator
+	scaleInfo := "───── = 50 miles"
 	
 	// Add frame indicator dots at bottom
 	var frameIndicator strings.Builder
@@ -548,62 +539,41 @@ func (m model) renderRadarFrame() string {
 		Width(radarWidth).
 		Align(lipgloss.Center).
 		Render(frameIndicator.String())
+	radarStr += "\n" + lipgloss.NewStyle().
+		Foreground(lipgloss.Color("239")).
+		Width(radarWidth).
+		Align(lipgloss.Center).
+		Render(scaleInfo)
 	
 	return radarContainerStyle.Render(radarStr)
 }
 
-func (m model) drawRadarCircles(display [][]string, centerX, centerY int) {
-	radii := []int{5, 10, 15, 20}
-	for _, r := range radii {
-		m.drawCircle(display, centerX, centerY, r, "·")
-	}
+func (m model) drawDistanceMarkers(display [][]string, centerX, centerY int) {
+	// Draw simple distance circles (not animated)
+	markerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	
-	// Draw center
-	if centerY < len(display) && centerX < len(display[0]) {
-		display[centerY][centerX] = "+"
-	}
-	
-	// Draw cardinal directions
-	if centerY-radii[len(radii)-1] >= 0 {
-		display[centerY-radii[len(radii)-1]][centerX] = "N"
-	}
-	if centerY+radii[len(radii)-1] < len(display) {
-		display[centerY+radii[len(radii)-1]][centerX] = "S"
-	}
-	if centerX-radii[len(radii)-1] >= 0 {
-		display[centerY][centerX-radii[len(radii)-1]] = "W"
-	}
-	if centerX+radii[len(radii)-1] < len(display[0]) {
-		display[centerY][centerX+radii[len(radii)-1]] = "E"
-	}
-}
-
-func (m model) drawCircle(display [][]string, centerX, centerY, radius int, char string) {
-	for angle := 0.0; angle < 360.0; angle += 5 {
+	// 50 mile ring
+	radius := 12
+	for angle := 0.0; angle < 360.0; angle += 10 {
 		x := int(float64(centerX) + float64(radius)*math.Cos(angle*math.Pi/180))
 		y := int(float64(centerY) + float64(radius)*math.Sin(angle*math.Pi/180))
 		
 		if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-			display[y][x] = char
+			if display[y][x] == " " {
+				display[y][x] = markerStyle.Render("·")
+			}
 		}
 	}
-}
-
-func (m model) drawSweepLine(display [][]string, centerX, centerY int) {
-	angle := m.sweepAngle * math.Pi / 180
-	length := 20
 	
-	for i := 0; i < length; i++ {
-		x := int(float64(centerX) + float64(i)*math.Cos(angle))
-		y := int(float64(centerY) + float64(i)*math.Sin(angle))
+	// 100 mile ring
+	radius = 22
+	for angle := 0.0; angle < 360.0; angle += 15 {
+		x := int(float64(centerX) + float64(radius)*math.Cos(angle*math.Pi/180))
+		y := int(float64(centerY) + float64(radius)*math.Sin(angle*math.Pi/180)*0.5) // Adjust for terminal aspect ratio
 		
 		if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-			if i < length/3 {
-				display[y][x] = lipgloss.NewStyle().Foreground(radarGreen).Render("━")
-			} else if i < 2*length/3 {
-				display[y][x] = lipgloss.NewStyle().Foreground(radarYellow).Render("─")
-			} else {
-				display[y][x] = lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Render("·")
+			if display[y][x] == " " {
+				display[y][x] = markerStyle.Render("·")
 			}
 		}
 	}
@@ -637,63 +607,119 @@ func (m model) drawPrecipitation(display [][]string, data [][]int) {
 	}
 }
 
-func (m model) generateParticles() {
-	// Generate particles based on precipitation intensity
-	if len(m.radar.frames) == 0 {
-		return
-	}
+func (m model) drawGeographicBoundaries(display [][]string, centerX, centerY int) {
+	// This draws approximate state/geographic boundaries based on the radar station
+	// The boundaries are simplified for terminal display
 	
-	frame := m.radar.frames[m.currentFrame]
-	if frame.data == nil {
-		return
-	}
+	boundaryChar := "·"
+	boundaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	
-	// Add new particles
-	for y := 0; y < len(frame.data) && len(m.particles) < 50; y++ {
-		for x := 0; x < len(frame.data[y]); x++ {
-			if frame.data[y][x] > 5 && len(m.particles) < 50 {
-				m.particles = append(m.particles, particle{
-					x:     float64(x),
-					y:     float64(y),
-					vx:    (math.Cos(m.sweepAngle*math.Pi/180) - 0.5) * 0.5,
-					vy:    0.3,
-					life:  20,
-					color: radarGreen,
-				})
+	switch m.radar.station {
+	case "KOKX": // New York
+		// Draw Long Island coastline
+		for x := 10; x < 40; x++ {
+			y := centerY + 5 + int(math.Sin(float64(x)/5)*2)
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render("═")
 			}
 		}
-	}
-}
-
-func (m *model) updateParticles() {
-	// Update existing particles
-	newParticles := []particle{}
-	for _, p := range m.particles {
-		p.x += p.vx
-		p.y += p.vy
-		p.life--
+		// Connecticut border
+		for y := 0; y < centerY; y++ {
+			x := centerX - 10
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render("│")
+			}
+		}
 		
-		if p.life > 0 && p.x >= 0 && p.x < radarWidth && p.y >= 0 && p.y < radarHeight {
-			newParticles = append(newParticles, p)
+	case "KLOT": // Chicago
+		// Lake Michigan shoreline
+		for y := 0; y < radarHeight; y++ {
+			x := centerX + 15 - int(math.Sin(float64(y)/3)*3)
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render("│")
+			}
+		}
+		// State lines
+		for x := 0; x < centerX-5; x++ {
+			y := centerY + 8
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render("─")
+			}
+		}
+		
+	case "KAMX": // Miami
+		// Florida coastline
+		for y := 0; y < radarHeight-5; y++ {
+			x := centerX + 12 + int(math.Sin(float64(y)/4)*2)
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render(")")
+			}
+		}
+		// Draw the Keys
+		for x := centerX-10; x < centerX+5; x++ {
+			y := radarHeight - 3
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				if x%3 == 0 {
+					display[y][x] = boundaryStyle.Render("·")
+				}
+			}
+		}
+		
+	case "KATX": // Seattle
+		// Puget Sound
+		for y := 5; y < radarHeight-5; y++ {
+			x := centerX - int(math.Sin(float64(y)/5)*3)
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render("≈")
+			}
+		}
+		// Cascade Mountains (to the east)
+		for y := 0; y < radarHeight; y++ {
+			x := centerX + 18
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render("^")
+			}
+		}
+		
+	case "KFWS": // Dallas
+		// Draw rough Texas borders
+		for x := 0; x < 10; x++ {
+			y := centerY - 10
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+				display[y][x] = boundaryStyle.Render("─")
+			}
+		}
+		// Red River
+		for x := centerX-15; x < centerX+15; x++ {
+			y := 3
+			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) && x%2 == 0 {
+				display[y][x] = boundaryStyle.Render("~")
+			}
+		}
+		
+	default:
+		// Generic state boundary indicators
+		for i := 0; i < 4; i++ {
+			angle := float64(i) * math.Pi / 2
+			for r := 15; r < 20; r++ {
+				x := centerX + int(float64(r)*math.Cos(angle))
+				y := centerY + int(float64(r)*math.Sin(angle))
+				if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
+					display[y][x] = boundaryStyle.Render(boundaryChar)
+				}
+			}
 		}
 	}
-	m.particles = newParticles
+	
+	// Add city marker for the center
+	if centerY >= 0 && centerY < len(display) && centerX >= 0 && centerX < len(display[0]) {
+		display[centerY][centerX] = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("226")).
+			Bold(true).
+			Render("★")
+	}
 }
 
-func (m model) drawParticles(display [][]string) {
-	for _, p := range m.particles {
-		x, y := int(p.x), int(p.y)
-		if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-			char := "·"
-			if p.life > 15 {
-				char = "∘"
-			} else if p.life > 10 {
-				char = "·"
-			}
-			display[y][x] = lipgloss.NewStyle().Foreground(p.color).Render(char)
-		}
-	}
-}
 
 func (m model) renderControls() string {
 	controls := []string{
@@ -756,7 +782,6 @@ func (m model) resetToInput() model {
 	m.errorMsg = ""
 	m.zipInput.SetValue("")
 	m.zipInput.Focus()
-	m.particles = []particle{}
 	return m
 }
 
@@ -764,12 +789,6 @@ func (m model) resetToInput() model {
 func (m model) animateFrame() tea.Cmd {
 	return tea.Tick(m.frameRate, func(t time.Time) tea.Msg {
 		return frameTickMsg(t)
-	})
-}
-
-func (m model) animateSweep() tea.Cmd {
-	return tea.Tick(50*time.Millisecond, func(t time.Time) tea.Msg {
-		return sweepTickMsg(t)
 	})
 }
 
@@ -832,12 +851,18 @@ func fetchRealRadarData(station string, lat, lon float64) ([]radarFrame, bool, e
 	client := &http.Client{Timeout: 30 * time.Second}
 	frames := []radarFrame{}
 	
-	// Iowa State University provides a reliable radar API
-	// They host NEXRAD data that's easier to access than NWS directly
+	// First try RainViewer - it provides more historical frames
+	frames, err := fetchFromRainViewer(lat, lon)
+	if err == nil && len(frames) > 0 {
+		log.Printf("Successfully fetched %d frames from RainViewer", len(frames))
+		return frames, true, nil
+	}
+	
+	// Fallback to Iowa State University
 	baseTime := time.Now().UTC()
 	
-	// Try to get the last 6 frames (30 minutes of data)
-	for i := 0; i < 6; i++ {
+	// Try to get the last 2 hours of data (every 5 minutes)
+	for i := 0; i < 24; i++ { // 24 frames = 2 hours
 		frameTime := baseTime.Add(time.Duration(-i*5) * time.Minute)
 		
 		// Round to nearest 5 minutes
@@ -849,8 +874,8 @@ func fetchRealRadarData(station string, lat, lon float64) ([]radarFrame, bool, e
 		// Build URL for Iowa State's Mesonet API
 		timeStr := frameTime.Format("200601021504")
 		radarURL := fmt.Sprintf("https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=true&LAYERS=nexrad-n0r&WIDTH=%d&HEIGHT=%d&SRS=EPSG:4326&BBOX=%f,%f,%f,%f&TIME=%s",
-			radarWidth*2, radarHeight*2,
-			lon-2.0, lat-1.5, lon+2.0, lat+1.5,
+			radarWidth*4, radarHeight*4, // Higher resolution
+			lon-2.5, lat-2.0, lon+2.5, lat+2.0, // Wider area
 			timeStr,
 		)
 		
@@ -867,18 +892,7 @@ func fetchRealRadarData(station string, lat, lon float64) ([]radarFrame, bool, e
 		// Decode the PNG image
 		img, err := png.Decode(resp.Body)
 		if err != nil {
-			// Try as a generic image
-			resp.Body.Close()
-			resp, err = client.Get(radarURL)
-			if err != nil {
-				continue
-			}
-			defer resp.Body.Close()
-			
-			img, _, err = image.Decode(resp.Body)
-			if err != nil {
-				continue
-			}
+			continue
 		}
 		
 		// Convert image to radar data
@@ -891,15 +905,15 @@ func fetchRealRadarData(station string, lat, lon float64) ([]radarFrame, bool, e
 			}
 			frames = append(frames, frame)
 		}
+		
+		// Stop if we have enough frames
+		if len(frames) >= maxFrames {
+			break
+		}
 	}
 	
 	if len(frames) == 0 {
-		// Try alternative: RainViewer API (free, no key required)
-		frames, err := fetchFromRainViewer(lat, lon)
-		if err != nil || len(frames) == 0 {
-			return nil, false, fmt.Errorf("no radar data available")
-		}
-		return frames, true, nil
+		return nil, false, fmt.Errorf("no radar data available")
 	}
 	
 	// Reverse frames so oldest is first
@@ -908,6 +922,7 @@ func fetchRealRadarData(station string, lat, lon float64) ([]radarFrame, bool, e
 		frames[i], frames[opp] = frames[opp], frames[i]
 	}
 	
+	log.Printf("Successfully fetched %d frames from Iowa State", len(frames))
 	return frames, true, nil
 }
 
@@ -927,6 +942,10 @@ func fetchFromRainViewer(lat, lon float64) ([]radarFrame, error) {
 				Time int64  `json:"time"`
 				Path string `json:"path"`
 			} `json:"past"`
+			Nowcast []struct {
+				Time int64  `json:"time"`
+				Path string `json:"path"`
+			} `json:"nowcast"`
 		} `json:"radar"`
 	}
 	
@@ -936,21 +955,14 @@ func fetchFromRainViewer(lat, lon float64) ([]radarFrame, error) {
 	
 	frames := []radarFrame{}
 	
-	// Get the last few radar frames
-	startIdx := 0
-	if len(apiData.Radar.Past) > 6 {
-		startIdx = len(apiData.Radar.Past) - 6
-	}
-	
-	for i := startIdx; i < len(apiData.Radar.Past); i++ {
-		past := apiData.Radar.Past[i]
-		
+	// Get all available past radar frames
+	for _, past := range apiData.Radar.Past {
 		// Calculate tile coordinates for the location
-		zoom := 6
+		zoom := 7 // Higher zoom for more detail
 		tileX, tileY := latLonToTile(lat, lon, zoom)
 		
 		// Build tile URL
-		tileURL := fmt.Sprintf("https://tilecache.rainviewer.com%s/256/%d/%d/%d/6/1_1.png",
+		tileURL := fmt.Sprintf("https://tilecache.rainviewer.com%s/512/%d/%d/%d/6/1_1.png",
 			past.Path, zoom, tileX, tileY)
 		
 		resp, err := client.Get(tileURL)
@@ -973,6 +985,10 @@ func fetchFromRainViewer(lat, lon float64) ([]radarFrame, error) {
 				product:   "Composite",
 			}
 			frames = append(frames, frame)
+		}
+		
+		if len(frames) >= maxFrames {
+			break
 		}
 	}
 	
@@ -997,6 +1013,9 @@ func imageToRadarData(img image.Image) [][]int {
 	for i := range data {
 		data[i] = make([]int, radarWidth)
 	}
+	
+	// Track if we found any precipitation
+	foundPrecipitation := false
 	
 	// Sample the image and convert to intensity values
 	for y := 0; y < radarHeight; y++ {
@@ -1023,19 +1042,27 @@ func imageToRadarData(img image.Image) [][]int {
 			g8 := uint8(g >> 8)
 			b8 := uint8(b >> 8)
 			
-			// Detect precipitation colors
+			// Detect precipitation colors (based on standard NEXRAD color scales)
 			if r8 > 200 && g8 < 100 && b8 < 100 {
 				// Red - heavy precipitation
 				intensity = 8 + int((r8-200)/28)
+				foundPrecipitation = true
 			} else if r8 > 200 && g8 > 150 && b8 < 100 {
 				// Orange/Yellow - moderate precipitation
 				intensity = 5 + int((r8-200)/50)
+				foundPrecipitation = true
 			} else if g8 > 150 && r8 < 150 && b8 < 100 {
 				// Green - light precipitation
 				intensity = 1 + int((g8-150)/50)
+				foundPrecipitation = true
 			} else if b8 > 150 && r8 < 100 && g8 < 150 {
 				// Blue - very light precipitation
 				intensity = 1
+				foundPrecipitation = true
+			} else if r8 > 100 && g8 > 100 && b8 < 50 {
+				// Yellowish - moderate
+				intensity = 4
+				foundPrecipitation = true
 			}
 			
 			// Clamp to valid range
@@ -1048,6 +1075,13 @@ func imageToRadarData(img image.Image) [][]int {
 			
 			data[y][x] = intensity
 		}
+	}
+	
+	// Log if we found precipitation (helps verify real data)
+	if foundPrecipitation {
+		log.Printf("Found precipitation in radar image")
+	} else {
+		log.Printf("No precipitation detected in radar image")
 	}
 	
 	return data
