@@ -137,7 +137,6 @@ type model struct {
 	progress     progress.Model
 	radar        radarData
 	currentFrame int
-	frameTimer   *time.Timer
 	width        int
 	height       int
 	errorMsg     string
@@ -149,9 +148,11 @@ type model struct {
 	
 	// Auto-refresh
 	lastRefresh  time.Time
-	refreshTimer *time.Timer
 	autoRefresh  bool
 	zipCode      string // Store for refresh
+	
+	// Timer management - these are key to fixing the speedup issue
+	animationActive bool // Track if animation is running
 }
 
 // Particle effect for radar
@@ -202,6 +203,7 @@ func initialModel() model {
 		height:      40,
 		frameRate:   300 * time.Millisecond, // Faster for smoother animation
 		autoRefresh: true,
+		animationActive: false,
 	}
 }
 
@@ -221,6 +223,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "esc":
 			if m.state == stateDisplaying || m.state == stateError {
+				m.animationActive = false // Stop animation when leaving
 				m = m.resetToInput()
 				return m, textinput.Blink
 			}
@@ -239,10 +242,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ":
 			if m.state == stateDisplaying {
 				m.isPaused = !m.isPaused
+				// If unpausing and animation not active, restart it
+				if !m.isPaused && !m.animationActive {
+					m.animationActive = true
+					cmds = append(cmds, m.animateFrame())
+				}
 			}
 		case "r":
 			if m.state == stateDisplaying && m.zipCode != "" {
-				// Manual refresh
+				// Manual refresh - stop current animation
+				m.animationActive = false
 				m.state = stateLoading
 				cmds = append(cmds,
 					m.spinner.Tick,
@@ -291,7 +300,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentFrame = 0
 		m.isPaused = false
 		m.lastRefresh = time.Now()
-		cmds = append(cmds, m.animateFrame())
+		
+		// Start animation only if not already running
+		if !m.animationActive {
+			m.animationActive = true
+			cmds = append(cmds, m.animateFrame())
+		}
 		
 		// Start auto-refresh timer (refresh every 5 minutes)
 		if m.autoRefresh {
@@ -307,14 +321,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case frameTickMsg:
-		if m.state == stateDisplaying && !m.isPaused && len(m.radar.frames) > 0 {
+		// Only process if we're still displaying and animation is active
+		if m.state == stateDisplaying && m.animationActive && !m.isPaused && len(m.radar.frames) > 0 {
 			m.currentFrame = (m.currentFrame + 1) % len(m.radar.frames)
+			// Continue animation
 			cmds = append(cmds, m.animateFrame())
+		} else {
+			// Animation stopped, clear the flag
+			m.animationActive = false
 		}
 
 	case errorMsg:
 		m.state = stateError
 		m.errorMsg = msg.err.Error()
+		m.animationActive = false // Stop animation on error
 
 	}
 
@@ -782,6 +802,7 @@ func (m model) resetToInput() model {
 	m.errorMsg = ""
 	m.zipInput.SetValue("")
 	m.zipInput.Focus()
+	m.animationActive = false // Important: clear animation flag
 	return m
 }
 
