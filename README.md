@@ -2,6 +2,11 @@
 
 A beautiful, real-time weather radar in your terminal. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
+Updated video:
+
+
+https://github.com/user-attachments/assets/0442c9d7-a3d9-4e64-814f-0a6037d88c2e
+
 
 https://github.com/user-attachments/assets/0969d801-d653-49ed-8358-672fde4269df
 
