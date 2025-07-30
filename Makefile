@@ -1,7 +1,7 @@
 .PHONY: build run clean install test lint fmt help
 
 # Binary name
-BINARY_NAME=termiradar
+BINARY_NAME=termidar
 BINARY_PATH=./bin/$(BINARY_NAME)
 
 # Go parameters

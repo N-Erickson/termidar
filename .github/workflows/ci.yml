@@ -11,10 +11,10 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.21'
 
@@ -39,10 +39,10 @@ jobs:
           - goos: windows
             goarch: arm64
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.21'
 
@@ -54,16 +54,16 @@ jobs:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
       run: |
-        output_name='termiradar-${{ matrix.goos }}-${{ matrix.goarch }}'
+        output_name='termidar-${{ matrix.goos }}-${{ matrix.goarch }}'
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output_name+='.exe'
         fi
         go build -ldflags="-s -w" -o "bin/${output_name}" .
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: binaries
+        name: termidar-${{ matrix.goos }}-${{ matrix.goarch }}
         path: bin/
 
   release:
@@ -72,16 +72,16 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Download artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
-        name: binaries
         path: bin/
+        merge-multiple: true
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: bin/*
         draft: false
