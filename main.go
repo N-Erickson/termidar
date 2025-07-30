@@ -2271,8 +2271,18 @@ func fetchCurrentWeather(lat, lon float64) (int, string) {
 	}
 
 	temp := obsData.Properties.Temperature.Value
-	if obsData.Properties.Temperature.UnitCode == "wmoUnit:degC" {
+	unitCode := obsData.Properties.Temperature.UnitCode
+	
+	// Log for debugging
+	log.Printf("Temperature value: %f, unit: %s", temp, unitCode)
+	
+	// Check for Celsius in various formats the API might return
+	if strings.Contains(strings.ToLower(unitCode), "degc") || 
+	   strings.Contains(strings.ToLower(unitCode), "celsius") ||
+	   unitCode == "wmoUnit:degC" ||
+	   unitCode == "unit:degC" {
 		temp = temp*9/5 + 32
+		log.Printf("Converted from Celsius to Fahrenheit: %f", temp)
 	}
 
 	conditions := obsData.Properties.TextDescription
