@@ -1,4 +1,4 @@
-# termiadar 🌦️
+# termidar 🌦️
 
 A beautiful, real-time weather radar in your terminal. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
