@@ -333,7 +333,7 @@ func (m model) View() string {
 	var content string
 
 	// Header
-	header := titleStyle.Render("🌦️  Weather Radar Terminal v2.0")
+	header := titleStyle.Render("🌦️  Termidar: Terminal Radar")
 	
 	switch m.state {
 	case stateInput:
