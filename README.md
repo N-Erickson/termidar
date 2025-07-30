@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/0969d801-d653-49ed-8358-672fde4269df
 
 ```bash
 # Clone the repository
-git clone https://github.com/N-Erickson/termiradar.git
+git clone https://github.com/N-Erickson/termidar.git
 cd termiradar
 
 # Build and install
