@@ -24,7 +24,7 @@ import (
 const (
 	radarWidth  = 60
 	radarHeight = 30
-	maxFrames   = 20  // Increased from 12 to get more animation frames
+	maxFrames   = 20
 )
 
 // Styles
@@ -114,55 +114,52 @@ const (
 	stateError
 )
 
+// Weather alert types
+type weatherAlert struct {
+	event       string
+	severity    string
+	urgency     string
+	headline    string
+	description string
+	expires     time.Time
+}
+
 // Radar data types
 type radarData struct {
 	frames      []radarFrame
 	location    string
 	station     string
 	lastUpdated time.Time
-	isRealData  bool // Track if this is real or simulated data
-	temperature int  // Current temperature in Fahrenheit
-	conditions  string // Current weather conditions
+	isRealData  bool
+	temperature int
+	conditions  string
+	alerts      []weatherAlert
 }
 
 type radarFrame struct {
-	data      [][]int // Intensity values 0-10
+	data      [][]int
 	timestamp time.Time
-	product   string // Radar product type (N0R, N0S, etc.)
+	product   string
 }
 
 // Model represents the application state
 type model struct {
-	state        state
-	zipInput     textinput.Model
-	spinner      spinner.Model
-	progress     progress.Model
-	radar        radarData
-	currentFrame int
-	width        int
-	height       int
-	errorMsg     string
-	
-	// UI state
-	showHelp     bool
-	isPaused     bool
-	frameRate    time.Duration
-	
-	// Auto-refresh
-	lastRefresh  time.Time
-	autoRefresh  bool
-	zipCode      string // Store for refresh
-	
-	// Timer management - these are key to fixing the speedup issue
-	animationActive bool // Track if animation is running
-}
-
-// Particle effect for radar
-type particle struct {
-	x, y   float64
-	vx, vy float64
-	life   int
-	color  lipgloss.Color
+	state           state
+	zipInput        textinput.Model
+	spinner         spinner.Model
+	progress        progress.Model
+	radar           radarData
+	currentFrame    int
+	width           int
+	height          int
+	errorMsg        string
+	showHelp        bool
+	isPaused        bool
+	frameRate       time.Duration
+	lastRefresh     time.Time
+	autoRefresh     bool
+	zipCode         string
+	animationActive bool
 }
 
 // Messages
@@ -197,14 +194,14 @@ func initialModel() model {
 	)
 
 	return model{
-		state:       stateInput,
-		zipInput:    ti,
-		spinner:     s,
-		progress:    p,
-		width:       80,
-		height:      40,
-		frameRate:   300 * time.Millisecond, // Faster for smoother animation
-		autoRefresh: true,
+		state:           stateInput,
+		zipInput:        ti,
+		spinner:         s,
+		progress:        p,
+		width:           80,
+		height:          40,
+		frameRate:       300 * time.Millisecond,
+		autoRefresh:     true,
 		animationActive: false,
 	}
 }
@@ -225,7 +222,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "esc":
 			if m.state == stateDisplaying || m.state == stateError {
-				m.animationActive = false // Stop animation when leaving
+				m.animationActive = false
 				m = m.resetToInput()
 				return m, textinput.Blink
 			}
@@ -233,7 +230,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == stateInput && len(m.zipInput.Value()) == 5 {
 				m.state = stateLoading
 				m.zipCode = m.zipInput.Value()
-				cmds = append(cmds, 
+				cmds = append(cmds,
 					m.spinner.Tick,
 					loadRadarData(m.zipCode),
 					m.trackProgress(),
@@ -244,7 +241,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ":
 			if m.state == stateDisplaying {
 				m.isPaused = !m.isPaused
-				// If unpausing and animation not active, restart it
 				if !m.isPaused && !m.animationActive {
 					m.animationActive = true
 					cmds = append(cmds, m.animateFrame())
@@ -252,7 +248,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "r":
 			if m.state == stateDisplaying && m.zipCode != "" {
-				// Manual refresh - stop current animation
 				m.animationActive = false
 				m.state = stateLoading
 				cmds = append(cmds,
@@ -302,45 +297,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentFrame = 0
 		m.isPaused = false
 		m.lastRefresh = time.Now()
-		
-		// Start animation only if not already running
+
 		if !m.animationActive {
 			m.animationActive = true
 			cmds = append(cmds, m.animateFrame())
 		}
-		
-		// Start auto-refresh timer (refresh every 5 minutes)
+
 		if m.autoRefresh {
 			cmds = append(cmds, m.scheduleRefresh())
 		}
 
 	case refreshTickMsg:
 		if m.state == stateDisplaying && m.autoRefresh && m.zipCode != "" {
-			// Auto-refresh the radar data
 			cmds = append(cmds, loadRadarData(m.zipCode))
-			// Schedule next refresh
 			cmds = append(cmds, m.scheduleRefresh())
 		}
 
 	case frameTickMsg:
-		// Only process if we're still displaying and animation is active
 		if m.state == stateDisplaying && m.animationActive && !m.isPaused && len(m.radar.frames) > 0 {
 			m.currentFrame = (m.currentFrame + 1) % len(m.radar.frames)
-			// Continue animation
 			cmds = append(cmds, m.animateFrame())
 		} else {
-			// Animation stopped, clear the flag
 			m.animationActive = false
 		}
 
 	case errorMsg:
 		m.state = stateError
 		m.errorMsg = msg.err.Error()
-		m.animationActive = false // Stop animation on error
-
+		m.animationActive = false
 	}
 
-	// Handle text input updates
 	if m.state == stateInput {
 		var cmd tea.Cmd
 		m.zipInput, cmd = m.zipInput.Update(msg)
@@ -354,9 +340,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var content string
 
-	// Header
 	header := titleStyle.Render("🌦️  Termidar: Terminal Radar")
-	
+
 	switch m.state {
 	case stateInput:
 		inputBox := m.renderInputBox()
@@ -389,35 +374,35 @@ func (m model) renderInputBox() string {
 
 	prompt := "Enter a US ZIP code to view weather radar:"
 	input := m.zipInput.View()
-	
+
 	box := style.Render(
 		lipgloss.JoinVertical(lipgloss.Left, prompt, "", input),
 	)
 
 	examples := subtitleStyle.Render("Try: 10001 (NYC), 60601 (Chicago), 98101 (Seattle), 33101 (Miami)")
-	
+
 	return lipgloss.JoinVertical(lipgloss.Left, box, examples)
 }
 
 func (m model) renderLoading() string {
 	spinner := m.spinner.View()
 	progress := progressStyle.Render(m.progress.View())
-	
+
 	messages := []string{
 		"Locating ZIP code...",
 		"Finding nearest radar station...",
 		"Fetching radar data...",
 		"Processing frames...",
 	}
-	
+
 	progressPercent := m.progress.Percent()
 	messageIdx := int(progressPercent * float64(len(messages)-1))
 	if messageIdx >= len(messages) {
 		messageIdx = len(messages) - 1
 	}
-	
+
 	status := fmt.Sprintf("%s %s", spinner, messages[messageIdx])
-	
+
 	return lipgloss.JoinVertical(lipgloss.Center,
 		"",
 		status,
@@ -432,57 +417,75 @@ func (m model) renderRadar() string {
 		return "No radar data available"
 	}
 
-	// Info panel
 	info := m.renderInfoPanel()
-	
-	// Radar display
 	radarDisplay := m.renderRadarFrame()
-	
+
 	return lipgloss.JoinVertical(lipgloss.Left, info, radarDisplay)
 }
 
 func (m model) renderInfoPanel() string {
 	location := locationStyle.Render(fmt.Sprintf("📍 %s", m.radar.location))
 	station := stationStyle.Render(fmt.Sprintf("📡 Station: %s", m.radar.station))
-	
+
+	// Check for severe weather alerts
+	alertDisplay := ""
+	if len(m.radar.alerts) > 0 {
+		emoji, color, text := getAlertDisplay(m.radar.alerts)
+		if emoji != "" {
+			alertStyle := lipgloss.NewStyle().
+				Foreground(color).
+				Bold(true)
+
+			for _, alert := range m.radar.alerts {
+				if alert.severity == "Extreme" {
+					alertStyle = alertStyle.
+						Background(lipgloss.Color("52")).
+						Padding(0, 1)
+					break
+				}
+			}
+
+			alertDisplay = alertStyle.Render(fmt.Sprintf("%s %s", emoji, text))
+		}
+	}
+
 	// Temperature display
 	tempDisplay := ""
 	if m.radar.temperature != 0 {
 		tempDisplay = fmt.Sprintf("%d°F", m.radar.temperature)
-		// Color code temperature
-		tempColor := lipgloss.Color("87") // Default cyan
+		tempColor := lipgloss.Color("87")
 		if m.radar.temperature >= 90 {
-			tempColor = lipgloss.Color("196") // Red
+			tempColor = lipgloss.Color("196")
 		} else if m.radar.temperature >= 70 {
-			tempColor = lipgloss.Color("214") // Orange
+			tempColor = lipgloss.Color("214")
 		} else if m.radar.temperature >= 50 {
-			tempColor = lipgloss.Color("226") // Yellow
+			tempColor = lipgloss.Color("226")
 		} else if m.radar.temperature >= 32 {
-			tempColor = lipgloss.Color("87") // Cyan
+			tempColor = lipgloss.Color("87")
 		} else {
-			tempColor = lipgloss.Color("51") // Light blue
+			tempColor = lipgloss.Color("51")
 		}
 		tempDisplay = lipgloss.NewStyle().Foreground(tempColor).Bold(true).Render(tempDisplay)
 	}
-	
+
 	// Weather condition emoji
 	conditionEmoji := getWeatherEmoji(m.radar.conditions)
-	
+
 	// Show frame timestamp info
 	var frameInfo string
 	if len(m.radar.frames) > 0 && m.currentFrame < len(m.radar.frames) {
 		frame := m.radar.frames[m.currentFrame]
 		timeAgo := time.Since(frame.timestamp).Round(time.Minute)
-		frameInfo = fmt.Sprintf("Frame %d/%d (%s ago)", 
+		frameInfo = fmt.Sprintf("Frame %d/%d (%s ago)",
 			m.currentFrame+1, len(m.radar.frames), timeAgo)
 	} else {
 		frameInfo = fmt.Sprintf("Frame %d/%d", m.currentFrame+1, len(m.radar.frames))
 	}
-	
+
 	if m.isPaused {
 		frameInfo += " (PAUSED)"
 	}
-	
+
 	// Add last refresh time
 	refreshInfo := ""
 	if !m.lastRefresh.IsZero() {
@@ -493,30 +496,35 @@ func (m model) renderInfoPanel() string {
 			refreshInfo = fmt.Sprintf(" • Updated %dm ago", int(timeSinceRefresh.Minutes()))
 		}
 	}
-	
-	// Build the info line
+
+	// Build the info panel
 	infoItems := []string{location, station}
-	
+
 	if tempDisplay != "" {
 		infoItems = append(infoItems, tempDisplay)
 	}
-	
+
 	if conditionEmoji != "" {
 		infoItems = append(infoItems, conditionEmoji)
 	}
-	
-	// Add frame info on a separate line
+
 	topLine := strings.Join(infoItems, strings.Repeat(" ", 4))
-	bottomLine := helpStyle.Render(frameInfo + refreshInfo)
-	
+
+	var lines []string
+	if alertDisplay != "" {
+		lines = append(lines, alertDisplay)
+	}
+	lines = append(lines, topLine)
+	lines = append(lines, helpStyle.Render(frameInfo+refreshInfo))
+
 	return infoPanelStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left, topLine, bottomLine),
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
 	)
 }
 
 func (m model) renderRadarFrame() string {
 	frame := m.radar.frames[m.currentFrame]
-	
+
 	// Create the radar display grid
 	display := make([][]string, radarHeight)
 	for i := range display {
@@ -525,24 +533,24 @@ func (m model) renderRadarFrame() string {
 			display[i][j] = " "
 		}
 	}
-	
+
 	// Get center coordinates from the radar station
 	centerX, centerY := radarWidth/2, radarHeight/2
-	
+
 	// Draw geographic boundaries FIRST (so radar data appears on top)
 	m.drawGeographicBoundaries(display, centerX, centerY)
-	
-	// Draw simple distance markers instead of animated radar circles
+
+	// Draw simple distance markers
 	m.drawDistanceMarkers(display, centerX, centerY)
-	
-	// Draw precipitation data - this is the actual radar data
+
+	// Draw precipitation data
 	if frame.data != nil {
 		m.drawPrecipitation(display, frame.data)
 	}
-	
+
 	// Add scale indicator
 	scaleInfo := "───── = 50 miles"
-	
+
 	// Add frame indicator dots at bottom
 	var frameIndicator strings.Builder
 	for i := 0; i < len(m.radar.frames); i++ {
@@ -555,13 +563,13 @@ func (m model) renderRadarFrame() string {
 			frameIndicator.WriteString(" ")
 		}
 	}
-	
+
 	// Convert to string
 	var lines []string
 	for _, row := range display {
 		lines = append(lines, strings.Join(row, ""))
 	}
-	
+
 	radarStr := strings.Join(lines, "\n")
 	radarStr += "\n" + lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
@@ -573,33 +581,32 @@ func (m model) renderRadarFrame() string {
 		Width(radarWidth).
 		Align(lipgloss.Center).
 		Render(scaleInfo)
-	
+
 	return radarContainerStyle.Render(radarStr)
 }
 
 func (m model) drawDistanceMarkers(display [][]string, centerX, centerY int) {
-	// Draw simple distance circles (not animated)
 	markerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	
+
 	// 50 mile ring
 	radius := 12
 	for angle := 0.0; angle < 360.0; angle += 10 {
 		x := int(float64(centerX) + float64(radius)*math.Cos(angle*math.Pi/180))
 		y := int(float64(centerY) + float64(radius)*math.Sin(angle*math.Pi/180))
-		
+
 		if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
 			if display[y][x] == " " {
 				display[y][x] = markerStyle.Render("·")
 			}
 		}
 	}
-	
+
 	// 100 mile ring
 	radius = 22
 	for angle := 0.0; angle < 360.0; angle += 15 {
 		x := int(float64(centerX) + float64(radius)*math.Cos(angle*math.Pi/180))
-		y := int(float64(centerY) + float64(radius)*math.Sin(angle*math.Pi/180)*0.5) // Adjust for terminal aspect ratio
-		
+		y := int(float64(centerY) + float64(radius)*math.Sin(angle*math.Pi/180)*0.5)
+
 		if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
 			if display[y][x] == " " {
 				display[y][x] = markerStyle.Render("·")
@@ -623,7 +630,7 @@ func (m model) drawPrecipitation(display [][]string, data [][]int) {
 		lipgloss.Color("196"),
 		lipgloss.Color("160"),
 	}
-	
+
 	for y := 0; y < len(data) && y < radarHeight; y++ {
 		for x := 0; x < len(data[y]) && x < radarWidth; x++ {
 			intensity := data[y][x]
@@ -637,110 +644,505 @@ func (m model) drawPrecipitation(display [][]string, data [][]int) {
 }
 
 func (m model) drawGeographicBoundaries(display [][]string, centerX, centerY int) {
-	// This draws approximate state/geographic boundaries based on the radar station
-	// The boundaries are simplified for terminal display
-	
-	boundaryChar := "·"
+	// Get lat/lon to determine what features to draw
+	lat, lon, _, _, err := geocodeZip(m.zipCode)
+	if err != nil {
+		// If geocoding fails, just draw the center marker
+		if centerY >= 0 && centerY < len(display) && centerX >= 0 && centerX < len(display[0]) {
+			display[centerY][centerX] = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("226")).
+				Bold(true).
+				Render("★")
+		}
+		return
+	}
+
 	boundaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-	
-	switch m.radar.station {
-	case "KOKX": // New York
-		// Draw Long Island coastline
-		for x := 10; x < 40; x++ {
-			y := centerY + 5 + int(math.Sin(float64(x)/5)*2)
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render("═")
-			}
+	waterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	mountainStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("94"))
+	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	// Scale: approximately 1 character = 4-5 miles
+	milesPerCharX := 250.0 / float64(radarWidth)
+	milesPerCharY := 150.0 / float64(radarHeight)
+
+	// Helper functions first
+	max := func(a, b int) int {
+		if a > b {
+			return a
 		}
-		// Connecticut border
-		for y := 0; y < centerY; y++ {
-			x := centerX - 10
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render("│")
-			}
+		return b
+	}
+
+	min := func(a, b int) int {
+		if a < b {
+			return a
 		}
-		
-	case "KLOT": // Chicago
-		// Lake Michigan shoreline
-		for y := 0; y < radarHeight; y++ {
-			x := centerX + 15 - int(math.Sin(float64(y)/3)*3)
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render("│")
-			}
+		return b
+	}
+
+	abs := func(a int) int {
+		if a < 0 {
+			return -a
 		}
-		// State lines
-		for x := 0; x < centerX-5; x++ {
-			y := centerY + 8
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render("─")
-			}
+		return a
+	}
+
+	// Safe bounds checking function
+	inBounds := func(x, y int) bool {
+		return y >= 0 && y < len(display) && x >= 0 && x < len(display[0])
+	}
+
+	// Helper function to convert lat/lon to display coordinates
+	latLonToDisplay := func(targetLat, targetLon float64) (int, int) {
+		milesPerDegreeLat := 69.0
+		milesPerDegreeLon := 69.0 * math.Cos(lat*math.Pi/180)
+
+		deltaLat := targetLat - lat
+		deltaLon := targetLon - lon
+
+		milesNorth := deltaLat * milesPerDegreeLat
+		milesEast := deltaLon * milesPerDegreeLon
+
+		x := centerX + int(milesEast/milesPerCharX)
+		y := centerY - int(milesNorth/milesPerCharY)
+
+		return x, y
+	}
+
+	// Safe drawing helper that checks bounds
+	safeDrawPoint := func(x, y int, char string, style *lipgloss.Style) {
+		if inBounds(x, y) {
+			display[y][x] = style.Render(char)
 		}
-		
-	case "KAMX": // Miami
-		// Florida coastline
-		for y := 0; y < radarHeight-5; y++ {
-			x := centerX + 12 + int(math.Sin(float64(y)/4)*2)
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render(")")
-			}
+	}
+
+	// Safe line drawing function
+	drawLine := func(x1, y1, x2, y2 int, char string, style *lipgloss.Style, skipExisting bool) {
+		// Clip line to display bounds
+		if (x1 < 0 && x2 < 0) || (x1 >= radarWidth && x2 >= radarWidth) ||
+			(y1 < 0 && y2 < 0) || (y1 >= radarHeight && y2 >= radarHeight) {
+			return
 		}
-		// Draw the Keys
-		for x := centerX-10; x < centerX+5; x++ {
-			y := radarHeight - 3
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				if x%3 == 0 {
-					display[y][x] = boundaryStyle.Render("·")
+
+		// Simple clipping
+		x1 = max(0, min(radarWidth-1, x1))
+		x2 = max(0, min(radarWidth-1, x2))
+		y1 = max(0, min(radarHeight-1, y1))
+		y2 = max(0, min(radarHeight-1, y2))
+
+		if x1 == x2 { // Vertical line
+			if y1 > y2 {
+				y1, y2 = y2, y1
+			}
+			for y := y1; y <= y2; y++ {
+				if skipExisting && inBounds(x1, y) && display[y][x1] != " " {
+					continue
 				}
+				safeDrawPoint(x1, y, char, style)
 			}
-		}
-		
-	case "KATX": // Seattle
-		// Puget Sound
-		for y := 5; y < radarHeight-5; y++ {
-			x := centerX - int(math.Sin(float64(y)/5)*3)
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render("≈")
+		} else if y1 == y2 { // Horizontal line
+			if x1 > x2 {
+				x1, x2 = x2, x1
 			}
-		}
-		// Cascade Mountains (to the east)
-		for y := 0; y < radarHeight; y++ {
-			x := centerX + 18
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render("^")
+			for x := x1; x <= x2; x++ {
+				if skipExisting && inBounds(x, y1) && display[y1][x] != " " {
+					continue
+				}
+				safeDrawPoint(x, y1, char, style)
 			}
-		}
-		
-	case "KFWS": // Dallas
-		// Draw rough Texas borders
-		for x := 0; x < 10; x++ {
-			y := centerY - 10
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-				display[y][x] = boundaryStyle.Render("─")
+		} else { // Diagonal line
+			dx := abs(x2 - x1)
+			dy := abs(y2 - y1)
+			sx := 1
+			sy := 1
+			if x1 > x2 {
+				sx = -1
 			}
-		}
-		// Red River
-		for x := centerX-15; x < centerX+15; x++ {
-			y := 3
-			if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) && x%2 == 0 {
-				display[y][x] = boundaryStyle.Render("~")
+			if y1 > y2 {
+				sy = -1
 			}
-		}
-		
-	default:
-		// Generic state boundary indicators
-		for i := 0; i < 4; i++ {
-			angle := float64(i) * math.Pi / 2
-			for r := 15; r < 20; r++ {
-				x := centerX + int(float64(r)*math.Cos(angle))
-				y := centerY + int(float64(r)*math.Sin(angle))
-				if y >= 0 && y < len(display) && x >= 0 && x < len(display[0]) {
-					display[y][x] = boundaryStyle.Render(boundaryChar)
+			err := dx - dy
+
+			x, y := x1, y1
+			for {
+				if skipExisting && inBounds(x, y) && display[y][x] != " " {
+					// Skip this point
+				} else {
+					safeDrawPoint(x, y, char, style)
+				}
+
+				if x == x2 && y == y2 {
+					break
+				}
+
+				e2 := 2 * err
+				if e2 > -dy {
+					err -= dy
+					x += sx
+				}
+				if e2 < dx {
+					err += dx
+					y += sy
 				}
 			}
 		}
 	}
-	
-	// Add city marker for the center
+
+	// Draw state borders using actual state boundary data
+	drawStateBorders := func() {
+		// Define key state boundary points (simplified)
+		borders := [][]float64{
+			// South Dakota borders
+			{43.0, -104.05, 43.0, -96.44},
+			{43.0, -96.44, 45.94, -96.44},
+			{45.94, -96.44, 45.94, -104.05},
+			{45.94, -104.05, 43.0, -104.05},
+
+			// Nebraska borders
+			{40.0, -104.05, 43.0, -104.05},
+			{40.0, -95.31, 40.0, -104.05},
+			{40.0, -95.31, 43.0, -96.44},
+
+			// Iowa borders
+			{40.58, -95.77, 43.5, -96.44},
+			{40.38, -91.41, 40.58, -95.77},
+			{42.49, -90.64, 40.38, -91.41},
+			{43.5, -91.22, 43.5, -96.44},
+
+			// Minnesota borders
+			{43.5, -96.44, 49.0, -97.23},
+			{49.0, -95.15, 49.0, -97.23},
+			{47.5, -89.49, 49.0, -95.15},
+			{43.5, -91.22, 47.5, -92.3},
+
+			// Kansas borders
+			{37.0, -102.05, 40.0, -102.05},
+			{37.0, -94.62, 37.0, -102.05},
+			{39.0, -94.62, 40.0, -95.31},
+
+			// Colorado borders
+			{37.0, -109.05, 41.0, -109.05},
+			{37.0, -102.05, 37.0, -109.05},
+			{41.0, -102.05, 41.0, -109.05},
+
+			// Nevada borders
+			{42.0, -120.0, 42.0, -114.0},
+			{42.0, -114.0, 37.0, -114.0},
+			{37.0, -114.0, 35.0, -114.6},
+			{35.0, -114.6, 35.0, -120.0},
+			{35.0, -120.0, 39.0, -120.0},
+			{39.0, -120.0, 42.0, -120.0},
+
+			// Utah borders
+			{42.0, -114.0, 42.0, -109.05},
+			{42.0, -109.05, 37.0, -109.05},
+			{37.0, -109.05, 37.0, -114.0},
+			{37.0, -114.0, 42.0, -114.0},
+
+			// Arizona borders
+			{37.0, -114.0, 37.0, -109.05},
+			{37.0, -109.05, 31.33, -109.05},
+			{31.33, -111.07, 31.33, -114.81},
+			{32.5, -114.81, 35.0, -114.6},
+			{35.0, -114.6, 37.0, -114.0},
+
+			// New Mexico borders
+			{37.0, -109.05, 37.0, -103.0},
+			{37.0, -103.0, 32.0, -103.0},
+			{32.0, -103.0, 32.0, -106.5},
+			{32.0, -106.5, 31.78, -106.5},
+			{31.78, -106.5, 31.78, -108.2},
+			{31.78, -108.2, 31.33, -109.05},
+			{31.33, -109.05, 37.0, -109.05},
+
+			// Texas borders (simplified)
+			{36.5, -103.0, 36.5, -100.0},
+			{31.5, -106.5, 36.5, -103.0},
+			{25.8, -97.1, 31.5, -106.5},
+			{30.0, -93.5, 31.5, -94.0},
+
+			// California borders
+			{42.0, -120.0, 42.0, -124.2},
+			{35.0, -114.6, 42.0, -120.0},
+			{32.5, -114.5, 35.0, -114.6},
+
+			// Florida
+			{30.5, -87.5, 31.0, -82.0},
+		}
+
+		// Draw each border segment
+		for _, border := range borders {
+			startX, startY := latLonToDisplay(border[0], border[1])
+			endX, endY := latLonToDisplay(border[2], border[3])
+
+			// Determine if vertical or horizontal
+			if abs(startX-endX) < abs(startY-endY) {
+				drawLine(startX, startY, endX, endY, "│", &borderStyle, false)
+			} else {
+				drawLine(startX, startY, endX, endY, "─", &borderStyle, false)
+			}
+		}
+
+		// Add state abbreviations
+		stateLabels := []struct {
+			lat, lon float64
+			label    string
+		}{
+			{44.5, -100.0, "SD"}, {41.5, -99.0, "NE"}, {42.0, -93.5, "IA"},
+			{46.0, -94.5, "MN"}, {43.0, -89.5, "WI"}, {40.0, -89.0, "IL"},
+			{38.5, -98.5, "KS"}, {39.0, -105.5, "CO"}, {44.0, -107.5, "WY"},
+			{47.0, -110.0, "MT"}, {46.5, -100.5, "ND"}, {38.5, -92.5, "MO"},
+			{35.0, -97.5, "OK"}, {31.0, -99.0, "TX"}, {40.5, -112.0, "UT"},
+			{39.0, -119.5, "NV"}, {37.5, -119.5, "CA"}, {44.0, -120.5, "OR"},
+			{47.5, -120.5, "WA"}, {43.5, -114.0, "ID"}, {34.5, -106.0, "NM"},
+			{34.5, -112.0, "AZ"}, {42.5, -72.5, "VT"}, {43.5, -71.5, "NH"},
+			{42.3, -71.8, "MA"}, {41.7, -71.5, "RI"}, {41.6, -72.7, "CT"},
+			{43.0, -75.5, "NY"}, {40.5, -74.5, "NJ"}, {41.0, -77.5, "PA"},
+			{39.0, -75.5, "DE"}, {39.0, -76.5, "MD"}, {38.0, -79.5, "VA"},
+			{35.5, -79.5, "NC"}, {34.0, -81.0, "SC"}, {33.0, -83.5, "GA"},
+			{30.5, -84.5, "FL"}, {32.5, -86.5, "AL"}, {32.5, -90.0, "MS"},
+			{31.0, -92.0, "LA"}, {35.0, -86.0, "TN"}, {37.5, -84.5, "KY"},
+			{40.0, -82.5, "OH"}, {40.0, -86.0, "IN"}, {42.0, -84.5, "MI"},
+			{38.5, -81.0, "WV"}, {35.5, -92.5, "AR"},
+		}
+
+		// Draw visible state labels
+		for _, state := range stateLabels {
+			x, y := latLonToDisplay(state.lat, state.lon)
+			if inBounds(x, y) && x+len(state.label)-1 < len(display[0]) {
+				for i, ch := range state.label {
+					if inBounds(x+i, y) {
+						display[y][x+i] = boundaryStyle.Render(string(ch))
+					}
+				}
+			}
+		}
+	}
+
+	// Draw state borders first
+	drawStateBorders()
+
+	// Then draw geographic features on top
+	// Draw major rivers
+	rivers := []struct {
+		name string
+		path [][]float64
+	}{
+		{
+			"Mississippi",
+			[][]float64{
+				{47.5, -94.5}, {46.0, -94.0}, {44.0, -92.0}, {42.0, -90.5},
+				{40.0, -90.0}, {38.0, -89.5}, {36.0, -89.5}, {34.0, -90.5},
+				{32.0, -91.0}, {30.0, -91.0}, {29.0, -89.5},
+			},
+		},
+		{
+			"Missouri",
+			[][]float64{
+				{46.0, -111.5}, {45.5, -110.0}, {44.5, -108.0}, {43.5, -104.0},
+				{42.5, -100.0}, {41.5, -96.0}, {40.0, -95.0}, {39.0, -93.5},
+				{38.5, -90.5},
+			},
+		},
+		{
+			"Colorado",
+			[][]float64{
+				{36.0, -114.5}, {35.5, -113.0}, {34.5, -111.0}, {33.5, -109.0},
+				{32.5, -107.5}, {31.5, -105.5},
+			},
+		},
+		{
+			"Rio Grande",
+			[][]float64{
+				{37.0, -107.0}, {36.0, -106.0}, {34.0, -106.5}, {32.0, -106.5},
+				{30.0, -104.0}, {28.0, -102.0}, {26.0, -99.0}, {25.8, -97.2},
+			},
+		},
+	}
+
+	// Draw rivers
+	for _, river := range rivers {
+		for i := 0; i < len(river.path)-1; i++ {
+			x1, y1 := latLonToDisplay(river.path[i][0], river.path[i][1])
+			x2, y2 := latLonToDisplay(river.path[i+1][0], river.path[i+1][1])
+
+			steps := int(math.Max(math.Abs(float64(x2-x1)), math.Abs(float64(y2-y1))))
+			if steps > 0 {
+				for j := 0; j <= steps; j++ {
+					t := float64(j) / float64(steps)
+					x := int(float64(x1) + t*float64(x2-x1))
+					y := int(float64(y1) + t*float64(y2-y1))
+
+					if inBounds(x, y) && display[y][x] == " " {
+						display[y][x] = waterStyle.Render("~")
+					}
+				}
+			}
+		}
+	}
+
+	// Draw mountain ranges
+	mountains := []struct {
+		name string
+		path [][]float64
+	}{
+		{
+			"Rockies",
+			[][]float64{
+				{49.0, -114.0}, {47.0, -113.5}, {45.0, -112.5}, {43.0, -109.0},
+				{41.0, -105.5}, {39.0, -105.5}, {37.0, -105.0}, {35.0, -106.0},
+			},
+		},
+		{
+			"Cascades",
+			[][]float64{
+				{49.0, -121.5}, {47.5, -121.5}, {46.0, -121.7}, {44.0, -122.0},
+				{42.0, -122.2}, {40.5, -122.0},
+			},
+		},
+		{
+			"Sierra Nevada",
+			[][]float64{
+				{40.5, -121.0}, {39.0, -120.5}, {37.5, -119.0}, {36.0, -118.0},
+			},
+		},
+		{
+			"Appalachians",
+			[][]float64{
+				{44.0, -71.5}, {42.0, -73.5}, {40.0, -75.5}, {38.0, -78.5},
+				{36.0, -81.5}, {34.5, -83.5},
+			},
+		},
+	}
+
+	// Draw mountains
+	for _, mountain := range mountains {
+		for _, point := range mountain.path {
+			x, y := latLonToDisplay(point[0], point[1])
+			if inBounds(x, y) && display[y][x] == " " {
+				display[y][x] = mountainStyle.Render("^")
+			}
+			// Add some width to mountain ranges
+			if inBounds(x-1, y) && display[y][x-1] == " " {
+				display[y][x-1] = mountainStyle.Render("^")
+			}
+			if inBounds(x+1, y) && display[y][x+1] == " " {
+				display[y][x+1] = mountainStyle.Render("^")
+			}
+		}
+	}
+
+	// Draw coastlines
+	// Atlantic Coast
+	if lon > -85 {
+		coastPoints := [][]float64{
+			{45.0, -67.0}, {44.0, -68.0}, {42.5, -70.0}, {41.0, -71.0},
+			{40.5, -73.5}, {39.0, -74.0}, {37.5, -75.5}, {36.0, -76.0},
+			{34.0, -78.0}, {32.0, -80.0}, {30.0, -81.0}, {28.0, -80.5},
+			{25.5, -80.0}, {24.5, -81.5},
+		}
+
+		for i := 0; i < len(coastPoints)-1; i++ {
+			x1, y1 := latLonToDisplay(coastPoints[i][0], coastPoints[i][1])
+			x2, y2 := latLonToDisplay(coastPoints[i+1][0], coastPoints[i+1][1])
+
+			steps := int(math.Max(math.Abs(float64(x2-x1)), math.Abs(float64(y2-y1))))
+			if steps > 0 {
+				for j := 0; j <= steps; j++ {
+					t := float64(j) / float64(steps)
+					x := int(float64(x1) + t*float64(x2-x1))
+					y := int(float64(y1) + t*float64(y2-y1))
+
+					if inBounds(x, y) && display[y][x] == " " {
+						display[y][x] = waterStyle.Render("≈")
+					}
+				}
+			}
+		}
+	}
+
+	// Pacific Coast
+	if lon < -115 {
+		coastPoints := [][]float64{
+			{48.5, -124.7}, {47.0, -124.0}, {45.0, -124.0}, {43.0, -124.4},
+			{41.0, -124.2}, {39.0, -123.8}, {37.0, -122.5}, {35.0, -121.0},
+			{33.5, -118.0}, {32.5, -117.2},
+		}
+
+		for i := 0; i < len(coastPoints)-1; i++ {
+			x1, y1 := latLonToDisplay(coastPoints[i][0], coastPoints[i][1])
+			x2, y2 := latLonToDisplay(coastPoints[i+1][0], coastPoints[i+1][1])
+
+			steps := int(math.Max(math.Abs(float64(x2-x1)), math.Abs(float64(y2-y1))))
+			if steps > 0 {
+				for j := 0; j <= steps; j++ {
+					t := float64(j) / float64(steps)
+					x := int(float64(x1) + t*float64(x2-x1))
+					y := int(float64(y1) + t*float64(y2-y1))
+
+					if inBounds(x, y) && display[y][x] == " " {
+						display[y][x] = waterStyle.Render("≈")
+					}
+				}
+			}
+		}
+	}
+
+	// Gulf Coast
+	if lat < 33 && lon > -98 {
+		coastPoints := [][]float64{
+			{30.0, -87.5}, {29.5, -89.0}, {29.0, -91.0}, {28.5, -93.0},
+			{27.5, -95.0}, {26.5, -97.0}, {25.8, -97.2},
+		}
+
+		for i := 0; i < len(coastPoints)-1; i++ {
+			x1, y1 := latLonToDisplay(coastPoints[i][0], coastPoints[i][1])
+			x2, y2 := latLonToDisplay(coastPoints[i+1][0], coastPoints[i+1][1])
+
+			steps := int(math.Max(math.Abs(float64(x2-x1)), math.Abs(float64(y2-y1))))
+			if steps > 0 {
+				for j := 0; j <= steps; j++ {
+					t := float64(j) / float64(steps)
+					x := int(float64(x1) + t*float64(x2-x1))
+					y := int(float64(y1) + t*float64(y2-y1))
+
+					if inBounds(x, y) && display[y][x] == " " {
+						display[y][x] = waterStyle.Render("≈")
+					}
+				}
+			}
+		}
+	}
+
+	// Great Lakes
+	if lon > -93 && lon < -75 && lat > 41 && lat < 49 {
+		// Lake Superior
+		if lat > 46 {
+			lakePoints := [][]float64{
+				{48.0, -89.5}, {47.5, -91.0}, {46.5, -92.0}, {46.5, -94.0},
+				{47.0, -92.5}, {47.5, -90.5}, {48.0, -89.5},
+			}
+			for _, point := range lakePoints {
+				x, y := latLonToDisplay(point[0], point[1])
+				if inBounds(x, y) {
+					display[y][x] = waterStyle.Render("≈")
+				}
+			}
+		}
+
+		// Lake Michigan
+		if lon > -88 && lon < -85 {
+			for dlat := -2.0; dlat <= 2.0; dlat += 0.5 {
+				x, y := latLonToDisplay(lat+dlat, lon+1.5)
+				if inBounds(x, y) {
+					display[y][x] = waterStyle.Render("≈")
+				}
+			}
+		}
+	}
+
+	// Add city marker for the center (on top of everything)
 	if centerY >= 0 && centerY < len(display) && centerX >= 0 && centerX < len(display[0]) {
 		display[centerY][centerX] = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("226")).
@@ -748,7 +1150,6 @@ func (m model) drawGeographicBoundaries(display [][]string, centerX, centerY int
 			Render("★")
 	}
 }
-
 
 func (m model) renderControls() string {
 	controls := []string{
@@ -759,14 +1160,14 @@ func (m model) renderControls() string {
 		"[ESC] New location",
 		"[Q] Quit",
 	}
-	
+
 	if m.showHelp {
-		controls = append(controls, "", 
+		controls = append(controls, "",
 			fmt.Sprintf("Frame rate: %s", m.frameRate),
 			fmt.Sprintf("Auto-refresh: Every 5 minutes"),
 		)
 	}
-	
+
 	controlStr := helpStyle.Render(strings.Join(controls, " • "))
 	return controlStr
 }
@@ -774,7 +1175,7 @@ func (m model) renderControls() string {
 func (m model) renderError() string {
 	errorMsg := errorStyle.Render("❌ " + m.errorMsg)
 	help := helpStyle.Render("Press ESC to try again or Q to quit")
-	
+
 	return lipgloss.JoinVertical(lipgloss.Center,
 		"",
 		errorMsg,
@@ -795,11 +1196,11 @@ func (m model) renderHelp() string {
 		"  ←/→   - Navigate frames",
 		"  +/-   - Adjust speed",
 	}
-	
+
 	if m.showHelp {
 		return helpStyle.Render(strings.Join(help, "\n"))
 	}
-	
+
 	return helpStyle.Render("Press ? for help")
 }
 
@@ -811,20 +1212,18 @@ func (m model) resetToInput() model {
 	m.errorMsg = ""
 	m.zipInput.SetValue("")
 	m.zipInput.Focus()
-	m.animationActive = false // Important: clear animation flag
+	m.animationActive = false
 	return m
 }
 
-// getWeatherEmoji returns an emoji based on weather conditions
+// Weather helper functions
 func getWeatherEmoji(conditions string) string {
 	if conditions == "" {
 		return ""
 	}
-	
-	// Convert to lowercase for easier matching
+
 	cond := strings.ToLower(conditions)
-	
-	// Check for various weather conditions
+
 	switch {
 	case strings.Contains(cond, "thunder") || strings.Contains(cond, "storm"):
 		return "⛈️"
@@ -843,7 +1242,6 @@ func getWeatherEmoji(conditions string) string {
 		}
 		return "☁️"
 	case strings.Contains(cond, "clear") || strings.Contains(cond, "sunny"):
-		// Check time of day (very basic check)
 		hour := time.Now().Hour()
 		if hour >= 6 && hour < 18 {
 			return "☀️"
@@ -856,8 +1254,144 @@ func getWeatherEmoji(conditions string) string {
 	case strings.Contains(cond, "hail"):
 		return "🌨️"
 	default:
-		return "🌤️" // Default partly cloudy
+		return "🌤️"
 	}
+}
+
+func getAlertDisplay(alerts []weatherAlert) (emoji string, color lipgloss.Color, text string) {
+	if len(alerts) == 0 {
+		return "", lipgloss.Color(""), ""
+	}
+
+	// Find the most severe alert
+	var mostSevere weatherAlert
+	severityRank := map[string]int{
+		"Extreme":  4,
+		"Severe":   3,
+		"Moderate": 2,
+		"Minor":    1,
+		"Unknown":  0,
+	}
+
+	maxSeverity := -1
+	for _, alert := range alerts {
+		rank := severityRank[alert.severity]
+		if rank > maxSeverity {
+			maxSeverity = rank
+			mostSevere = alert
+		}
+	}
+
+	// Determine emoji and color based on event type and severity
+	switch {
+	case strings.Contains(strings.ToLower(mostSevere.event), "tornado"):
+		emoji = "🌪️"
+		color = lipgloss.Color("196")
+		text = "TORNADO " + strings.ToUpper(getAlertType(mostSevere.event))
+
+	case strings.Contains(strings.ToLower(mostSevere.event), "severe thunderstorm"):
+		emoji = "⛈️"
+		color = lipgloss.Color("208")
+		text = "SEVERE T-STORM " + strings.ToUpper(getAlertType(mostSevere.event))
+
+	case strings.Contains(strings.ToLower(mostSevere.event), "flood"):
+		emoji = "🌊"
+		color = lipgloss.Color("33")
+		text = "FLOOD " + strings.ToUpper(getAlertType(mostSevere.event))
+
+	case strings.Contains(strings.ToLower(mostSevere.event), "winter") ||
+		strings.Contains(strings.ToLower(mostSevere.event), "snow") ||
+		strings.Contains(strings.ToLower(mostSevere.event), "blizzard"):
+		emoji = "❄️"
+		color = lipgloss.Color("51")
+		text = strings.ToUpper(getAlertType(mostSevere.event))
+
+	case strings.Contains(strings.ToLower(mostSevere.event), "heat"):
+		emoji = "🔥"
+		color = lipgloss.Color("202")
+		text = "HEAT " + strings.ToUpper(getAlertType(mostSevere.event))
+
+	case strings.Contains(strings.ToLower(mostSevere.event), "wind"):
+		emoji = "💨"
+		color = lipgloss.Color("226")
+		text = "WIND " + strings.ToUpper(getAlertType(mostSevere.event))
+
+	default:
+		emoji = "⚠️"
+		if mostSevere.severity == "Extreme" {
+			color = lipgloss.Color("196")
+		} else if mostSevere.severity == "Severe" {
+			color = lipgloss.Color("208")
+		} else {
+			color = lipgloss.Color("226")
+		}
+		text = strings.ToUpper(getAlertType(mostSevere.event))
+	}
+
+	return emoji, color, text
+}
+
+func getAlertType(event string) string {
+	switch {
+	case strings.Contains(event, "Warning"):
+		return "WARNING"
+	case strings.Contains(event, "Watch"):
+		return "WATCH"
+	case strings.Contains(event, "Advisory"):
+		return "ADVISORY"
+	default:
+		return "ALERT"
+	}
+}
+
+func fetchWeatherAlerts(lat, lon float64) []weatherAlert {
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	alertsURL := fmt.Sprintf("https://api.weather.gov/alerts/active?point=%.4f,%.4f", lat, lon)
+
+	resp, err := client.Get(alertsURL)
+	if err != nil {
+		log.Printf("Failed to fetch weather alerts: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var alertsData struct {
+		Features []struct {
+			Properties struct {
+				Event       string    `json:"event"`
+				Severity    string    `json:"severity"`
+				Urgency     string    `json:"urgency"`
+				Headline    string    `json:"headline"`
+				Description string    `json:"description"`
+				Expires     time.Time `json:"expires"`
+			} `json:"properties"`
+		} `json:"features"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&alertsData); err != nil {
+		log.Printf("Failed to decode alerts: %v", err)
+		return nil
+	}
+
+	var alerts []weatherAlert
+	for _, feature := range alertsData.Features {
+		alert := weatherAlert{
+			event:       feature.Properties.Event,
+			severity:    feature.Properties.Severity,
+			urgency:     feature.Properties.Urgency,
+			headline:    feature.Properties.Headline,
+			description: feature.Properties.Description,
+			expires:     feature.Properties.Expires,
+		}
+		alerts = append(alerts, alert)
+	}
+
+	return alerts
 }
 
 // Animation commands
@@ -868,7 +1402,6 @@ func (m model) animateFrame() tea.Cmd {
 }
 
 func (m model) scheduleRefresh() tea.Cmd {
-	// Refresh every 5 minutes
 	return tea.Tick(5*time.Minute, func(t time.Time) tea.Msg {
 		return refreshTickMsg(t)
 	})
@@ -876,10 +1409,8 @@ func (m model) scheduleRefresh() tea.Cmd {
 
 func (m model) trackProgress() tea.Cmd {
 	return func() tea.Msg {
-		// Simulate progress updates
 		for i := 0; i <= 100; i += 10 {
 			time.Sleep(200 * time.Millisecond)
-			// Send progress update
 		}
 		return nil
 	}
@@ -888,31 +1419,27 @@ func (m model) trackProgress() tea.Cmd {
 // Data loading
 func loadRadarData(zipCode string) tea.Cmd {
 	return func() tea.Msg {
-		// Get location from ZIP
 		lat, lon, city, state, err := geocodeZip(zipCode)
 		if err != nil {
 			return errorMsg{err: fmt.Errorf("failed to geocode ZIP: %w", err)}
 		}
 
-		// Get radar station
 		station, err := getNWSRadarStation(lat, lon)
 		if err != nil {
 			return errorMsg{err: fmt.Errorf("failed to get radar station: %w", err)}
 		}
 
-		// Fetch current weather
 		temperature, conditions := fetchCurrentWeather(lat, lon)
+		alerts := fetchWeatherAlerts(lat, lon)
 
-		// Fetch real radar data
 		frames, isRealData, err := fetchRealRadarData(station, lat, lon)
 		if err != nil {
-			// Fall back to simulated data if real data fails
 			frames = generateRadarFrames(station, maxFrames)
 			isRealData = false
 		}
-		
+
 		location := fmt.Sprintf("%s, %s", city, state)
-		
+
 		return radarLoadedMsg{
 			radar: radarData{
 				frames:      frames,
@@ -922,6 +1449,7 @@ func loadRadarData(zipCode string) tea.Cmd {
 				isRealData:  isRealData,
 				temperature: temperature,
 				conditions:  conditions,
+				alerts:      alerts,
 			},
 		}
 	}
@@ -930,52 +1458,47 @@ func loadRadarData(zipCode string) tea.Cmd {
 func fetchRealRadarData(station string, lat, lon float64) ([]radarFrame, bool, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	frames := []radarFrame{}
-	
-	// First try RainViewer - it provides more historical frames
+
+	// First try RainViewer
 	frames, err := fetchFromRainViewer(lat, lon)
 	if err == nil && len(frames) > 0 {
 		log.Printf("Successfully fetched %d frames from RainViewer", len(frames))
 		return frames, true, nil
 	}
-	
+
 	// Fallback to Iowa State University
 	baseTime := time.Now().UTC()
-	
-	// Try to get the last 2 hours of data (every 5 minutes)
-	for i := 0; i < 24; i++ { // 24 frames = 2 hours
+
+	for i := 0; i < 24; i++ {
 		frameTime := baseTime.Add(time.Duration(-i*5) * time.Minute)
-		
-		// Round to nearest 5 minutes
+
 		minutes := frameTime.Minute()
 		minutes = (minutes / 5) * 5
 		frameTime = time.Date(frameTime.Year(), frameTime.Month(), frameTime.Day(),
 			frameTime.Hour(), minutes, 0, 0, time.UTC)
-		
-		// Build URL for Iowa State's Mesonet API
+
 		timeStr := frameTime.Format("200601021504")
 		radarURL := fmt.Sprintf("https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=true&LAYERS=nexrad-n0r&WIDTH=%d&HEIGHT=%d&SRS=EPSG:4326&BBOX=%f,%f,%f,%f&TIME=%s",
-			radarWidth*4, radarHeight*4, // Higher resolution
-			lon-2.5, lat-2.0, lon+2.5, lat+2.0, // Wider area
+			radarWidth*4, radarHeight*4,
+			lon-2.5, lat-2.0, lon+2.5, lat+2.0,
 			timeStr,
 		)
-		
+
 		resp, err := client.Get(radarURL)
 		if err != nil {
 			continue
 		}
 		defer resp.Body.Close()
-		
+
 		if resp.StatusCode != http.StatusOK {
 			continue
 		}
-		
-		// Decode the PNG image
+
 		img, err := png.Decode(resp.Body)
 		if err != nil {
 			continue
 		}
-		
-		// Convert image to radar data
+
 		data := imageToRadarData(img)
 		if data != nil {
 			frame := radarFrame{
@@ -985,37 +1508,35 @@ func fetchRealRadarData(station string, lat, lon float64) ([]radarFrame, bool, e
 			}
 			frames = append(frames, frame)
 		}
-		
-		// Stop if we have enough frames
+
 		if len(frames) >= maxFrames {
 			break
 		}
 	}
-	
+
 	if len(frames) == 0 {
 		return nil, false, fmt.Errorf("no radar data available")
 	}
-	
+
 	// Reverse frames so oldest is first
 	for i := len(frames)/2 - 1; i >= 0; i-- {
 		opp := len(frames) - 1 - i
 		frames[i], frames[opp] = frames[opp], frames[i]
 	}
-	
+
 	log.Printf("Successfully fetched %d frames from Iowa State", len(frames))
 	return frames, true, nil
 }
 
 func fetchFromRainViewer(lat, lon float64) ([]radarFrame, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	
-	// Get available timestamps
+
 	resp, err := client.Get("https://api.rainviewer.com/public/weather-maps.json")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	var apiData struct {
 		Radar struct {
 			Past []struct {
@@ -1028,35 +1549,31 @@ func fetchFromRainViewer(lat, lon float64) ([]radarFrame, error) {
 			} `json:"nowcast"`
 		} `json:"radar"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&apiData); err != nil {
 		return nil, err
 	}
-	
+
 	frames := []radarFrame{}
-	
-	// Get all available past radar frames
+
 	for _, past := range apiData.Radar.Past {
-		// Calculate tile coordinates for the location
-		zoom := 7 // Higher zoom for more detail
+		zoom := 7
 		tileX, tileY := latLonToTile(lat, lon, zoom)
-		
-		// Build tile URL
+
 		tileURL := fmt.Sprintf("https://tilecache.rainviewer.com%s/512/%d/%d/%d/6/1_1.png",
 			past.Path, zoom, tileX, tileY)
-		
+
 		resp, err := client.Get(tileURL)
 		if err != nil {
 			continue
 		}
 		defer resp.Body.Close()
-		
+
 		img, err := png.Decode(resp.Body)
 		if err != nil {
 			continue
 		}
-		
-		// Convert to radar data
+
 		data := imageToRadarData(img)
 		if data != nil {
 			frame := radarFrame{
@@ -1066,12 +1583,12 @@ func fetchFromRainViewer(lat, lon float64) ([]radarFrame, error) {
 			}
 			frames = append(frames, frame)
 		}
-		
+
 		if len(frames) >= maxFrames {
 			break
 		}
 	}
-	
+
 	return frames, nil
 }
 
@@ -1087,190 +1604,84 @@ func imageToRadarData(img image.Image) [][]int {
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
-	
-	// Create radar data array
+
 	data := make([][]int, radarHeight)
 	for i := range data {
 		data[i] = make([]int, radarWidth)
 	}
-	
-	// Track if we found any precipitation
+
 	foundPrecipitation := false
-	
-	// Sample the image and convert to intensity values
+
 	for y := 0; y < radarHeight; y++ {
 		for x := 0; x < radarWidth; x++ {
-			// Map terminal coordinates to image coordinates
 			imgX := x * width / radarWidth
 			imgY := y * height / radarHeight
-			
-			// Get pixel color
+
 			c := img.At(imgX, imgY)
 			r, g, b, a := c.RGBA()
-			
-			// Skip transparent pixels
+
 			if a < 128 {
 				continue
 			}
-			
-			// Convert color to radar intensity (0-10)
-			// Radar color scale typically goes from green -> yellow -> red
+
 			intensity := 0
-			
-			// Normalize to 0-255 range
+
 			r8 := uint8(r >> 8)
 			g8 := uint8(g >> 8)
 			b8 := uint8(b >> 8)
-			
-			// Detect precipitation colors (based on standard NEXRAD color scales)
+
 			if r8 > 200 && g8 < 100 && b8 < 100 {
-				// Red - heavy precipitation
 				intensity = 8 + int((r8-200)/28)
 				foundPrecipitation = true
 			} else if r8 > 200 && g8 > 150 && b8 < 100 {
-				// Orange/Yellow - moderate precipitation
 				intensity = 5 + int((r8-200)/50)
 				foundPrecipitation = true
 			} else if g8 > 150 && r8 < 150 && b8 < 100 {
-				// Green - light precipitation
 				intensity = 1 + int((g8-150)/50)
 				foundPrecipitation = true
 			} else if b8 > 150 && r8 < 100 && g8 < 150 {
-				// Blue - very light precipitation
 				intensity = 1
 				foundPrecipitation = true
 			} else if r8 > 100 && g8 > 100 && b8 < 50 {
-				// Yellowish - moderate
 				intensity = 4
 				foundPrecipitation = true
 			}
-			
-			// Clamp to valid range
+
 			if intensity > 10 {
 				intensity = 10
 			}
 			if intensity < 0 {
 				intensity = 0
 			}
-			
+
 			data[y][x] = intensity
 		}
 	}
-	
-	// Log if we found precipitation (helps verify real data)
+
 	if foundPrecipitation {
 		log.Printf("Found precipitation in radar image")
 	} else {
 		log.Printf("No precipitation detected in radar image")
 	}
-	
-	return data
-}
 
-func generateRealisticRadarData(station string, frameOffset int) [][]int {
-	// This generates more realistic-looking radar data
-	// In a real app, this would be replaced with actual radar data parsing
-	data := make([][]int, radarHeight)
-	for y := range data {
-		data[y] = make([]int, radarWidth)
-	}
-	
-	// Create realistic weather patterns based on station location
-	stationPatterns := map[string]struct {
-		stormX, stormY int
-		size           int
-		intensity      int
-		direction      float64
-	}{
-		"KOKX": {25, 12, 8, 7, 45},   // NYC - northeast movement
-		"KLOT": {20, 15, 10, 8, 90},  // Chicago - eastward movement
-		"KAMX": {30, 20, 12, 9, 315}, // Miami - northwest movement
-		"KATX": {15, 10, 9, 6, 135},  // Seattle - southeast movement
-		"KFWS": {22, 18, 11, 8, 60},  // Dallas - northeast movement
-	}
-	
-	pattern, exists := stationPatterns[station]
-	if !exists {
-		pattern = stationPatterns["KOKX"] // Default pattern
-	}
-	
-	// Move storm based on frame
-	stormX := pattern.stormX + frameOffset*int(math.Cos(pattern.direction*math.Pi/180)*3)
-	stormY := pattern.stormY + frameOffset*int(math.Sin(pattern.direction*math.Pi/180)*2)
-	
-	// Create main storm cell
-	for y := 0; y < radarHeight; y++ {
-		for x := 0; x < radarWidth; x++ {
-			dx := float64(x - stormX)
-			dy := float64(y - stormY)
-			dist := math.Sqrt(dx*dx + dy*dy)
-			
-			if dist < float64(pattern.size) {
-				// Realistic radar reflectivity pattern
-				intensity := pattern.intensity - int(dist*float64(pattern.intensity)/float64(pattern.size))
-				
-				// Add some noise for realism
-				noise := int(math.Sin(float64(x)*0.3)*2 + math.Cos(float64(y)*0.4)*2)
-				intensity += noise
-				
-				if intensity > 0 && intensity <= 10 {
-					data[y][x] = intensity
-				}
-			}
-			
-			// Add scattered precipitation
-			if math.Sin(float64(x+y+frameOffset))*math.Cos(float64(x-y)) > 0.7 {
-				if data[y][x] == 0 {
-					data[y][x] = 1 + int(math.Abs(math.Sin(float64(x*y))*3))
-				}
-			}
-		}
-	}
-	
-	// Add secondary cells
-	for i := 0; i < 2; i++ {
-		cellX := (stormX + 10 + i*15) % radarWidth
-		cellY := (stormY + 5 + i*8) % radarHeight
-		cellSize := 4 + i*2
-		
-		for y := -cellSize; y <= cellSize; y++ {
-			for x := -cellSize; x <= cellSize; x++ {
-				px, py := cellX+x, cellY+y
-				if px >= 0 && px < radarWidth && py >= 0 && py < radarHeight {
-					dist := math.Sqrt(float64(x*x + y*y))
-					if dist < float64(cellSize) {
-						intensity := 5 - int(dist)
-						if intensity > data[py][px] {
-							data[py][px] = intensity
-						}
-					}
-				}
-			}
-		}
-	}
-	
 	return data
 }
 
 func generateRadarFrames(station string, count int) []radarFrame {
 	frames := make([]radarFrame, count)
-	
+
 	for i := 0; i < count; i++ {
-		// Generate simulated precipitation data
 		data := make([][]int, radarHeight)
 		for y := range data {
 			data[y] = make([]int, radarWidth)
 		}
-		
-		// Create some storm cells
+
 		numCells := 2 + i%3
 		for c := 0; c < numCells; c++ {
-			// Random storm position that moves
 			centerX := 10 + (i*3+c*15)%radarWidth
 			centerY := 5 + (i*2+c*10)%radarHeight
 			intensity := 5 + c*2
-			
-			// Draw storm cell
+
 			for dy := -5; dy <= 5; dy++ {
 				for dx := -5; dx <= 5; dx++ {
 					x, y := centerX+dx, centerY+dy
@@ -1289,30 +1700,28 @@ func generateRadarFrames(station string, count int) []radarFrame {
 				}
 			}
 		}
-		
+
 		frames[i] = radarFrame{
 			data:      data,
 			timestamp: time.Now().Add(time.Duration(i*10) * time.Minute),
 		}
 	}
-	
+
 	return frames
 }
 
-// API functions (keeping the existing ones)
 func geocodeZip(zipCode string) (float64, float64, string, string, error) {
-	// First try using a free ZIP code API
 	url := fmt.Sprintf("https://api.zippopotam.us/us/%s", zipCode)
-	
+
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return getHardcodedLocation(zipCode)
+		return geocodeZipAlternative(zipCode)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return getHardcodedLocation(zipCode)
+		return geocodeZipAlternative(zipCode)
 	}
 
 	var result struct {
@@ -1329,83 +1738,88 @@ func geocodeZip(zipCode string) (float64, float64, string, string, error) {
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return getHardcodedLocation(zipCode)
+		return geocodeZipAlternative(zipCode)
 	}
 
 	if len(result.Places) == 0 {
-		return getHardcodedLocation(zipCode)
+		return geocodeZipAlternative(zipCode)
 	}
 
 	place := result.Places[0]
-	
+
 	lat, err := strconv.ParseFloat(place.Latitude, 64)
 	if err != nil {
-		return getHardcodedLocation(zipCode)
+		return 0, 0, "", "", fmt.Errorf("invalid latitude for ZIP %s", zipCode)
 	}
-	
+
 	lon, err := strconv.ParseFloat(place.Longitude, 64)
 	if err != nil {
-		return getHardcodedLocation(zipCode)
+		return 0, 0, "", "", fmt.Errorf("invalid longitude for ZIP %s", zipCode)
 	}
 
 	return lat, lon, place.PlaceName, place.StateCode, nil
 }
 
-func getHardcodedLocation(zipCode string) (float64, float64, string, string, error) {
-	locations := map[string]struct {
-		lat   float64
-		lon   float64
-		city  string
-		state string
-	}{
-		// Major cities
-		"10001": {40.7505, -73.9965, "New York", "NY"},
-		"10002": {40.7157, -73.9859, "New York", "NY"},
-		"10003": {40.7317, -73.9885, "New York", "NY"},
-		"90210": {34.0901, -118.4065, "Beverly Hills", "CA"},
-		"60601": {41.8856, -87.6228, "Chicago", "IL"},
-		"60602": {41.8826, -87.6290, "Chicago", "IL"},
-		"33101": {25.7751, -80.1947, "Miami", "FL"},
-		"98101": {47.6080, -122.3351, "Seattle", "WA"},
-		"75201": {32.7831, -96.8067, "Dallas", "TX"},
-		"85001": {33.4484, -112.0740, "Phoenix", "AZ"},
-		"80202": {39.7392, -104.9903, "Denver", "CO"},
-		"02108": {42.3601, -71.0589, "Boston", "MA"},
-		"94102": {37.7749, -122.4194, "San Francisco", "CA"},
-		"30301": {33.7490, -84.3880, "Atlanta", "GA"},
-		"77001": {29.7604, -95.3698, "Houston", "TX"},
-		"19019": {39.9526, -75.1652, "Philadelphia", "PA"},
-		"48201": {42.3314, -83.0458, "Detroit", "MI"},
-		"55401": {44.9778, -93.2650, "Minneapolis", "MN"},
-		"97201": {45.5152, -122.6784, "Portland", "OR"},
-		"89101": {36.1699, -115.1398, "Las Vegas", "NV"},
-		"70112": {29.9511, -90.0715, "New Orleans", "LA"},
+func geocodeZipAlternative(zipCode string) (float64, float64, string, string, error) {
+	url := fmt.Sprintf("https://api.geocod.io/v1.7/geocode?q=%s&api_key=demo", zipCode)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, 0, "", "", fmt.Errorf("failed to geocode ZIP %s: %w", zipCode, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, "", "", fmt.Errorf("unable to find location for ZIP %s", zipCode)
 	}
 
-	if loc, ok := locations[zipCode]; ok {
-		return loc.lat, loc.lon, loc.city, loc.state, nil
+	var result struct {
+		Results []struct {
+			AddressComponents struct {
+				City  string `json:"city"`
+				State string `json:"state"`
+			} `json:"address_components"`
+			Location struct {
+				Lat float64 `json:"lat"`
+				Lng float64 `json:"lng"`
+			} `json:"location"`
+		} `json:"results"`
 	}
 
-	return 0, 0, "", "", fmt.Errorf("unknown ZIP code: %s", zipCode)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, 0, "", "", fmt.Errorf("failed to decode geocoding response: %w", err)
+	}
+
+	if len(result.Results) == 0 {
+		return 0, 0, "", "", fmt.Errorf("no results found for ZIP %s", zipCode)
+	}
+
+	r := result.Results[0]
+	return r.Location.Lat, r.Location.Lng, r.AddressComponents.City, r.AddressComponents.State, nil
 }
 
 func getNWSRadarStation(lat, lon float64) (string, error) {
-	// Simplified - return nearest major radar station
 	stations := []struct {
 		id   string
 		lat  float64
 		lon  float64
 	}{
-		{"KOKX", 40.8653, -72.8639}, // New York
-		{"KLOT", 41.6045, -88.0847}, // Chicago
-		{"KAMX", 25.6111, -80.4128}, // Miami
+		{"KOKX", 40.8653, -72.8639},  // New York
+		{"KLOT", 41.6045, -88.0847},  // Chicago
+		{"KAMX", 25.6111, -80.4128},  // Miami
 		{"KATX", 48.1945, -122.4958}, // Seattle
-		{"KFWS", 32.5731, -97.3031}, // Dallas
+		{"KFWS", 32.5731, -97.3031},  // Dallas
+		{"KLVX", 37.9753, -85.9439},  // Louisville
+		{"KTFX", 47.4595, -111.3855}, // Great Falls
+		{"KSGF", 37.2355, -93.4003},  // Springfield
+		{"KLAS", 36.0558, -115.1622}, // Las Vegas
+		{"KPHX", 33.4301, -112.0128}, // Phoenix
 	}
 
 	minDist := 999999.0
 	nearest := "KOKX"
-	
+
 	for _, s := range stations {
 		dist := math.Sqrt(math.Pow(lat-s.lat, 2) + math.Pow(lon-s.lon, 2))
 		if dist < minDist {
@@ -1417,45 +1831,42 @@ func getNWSRadarStation(lat, lon float64) (string, error) {
 	return nearest, nil
 }
 
-// fetchCurrentWeather fetches current weather from NWS API
 func fetchCurrentWeather(lat, lon float64) (int, string) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	
-	// First get the grid endpoint for this location
+
 	pointURL := fmt.Sprintf("https://api.weather.gov/points/%.4f,%.4f", lat, lon)
-	
+
 	resp, err := client.Get(pointURL)
 	if err != nil {
 		log.Printf("Failed to get NWS point data: %v", err)
 		return 0, ""
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("NWS point API returned status: %d", resp.StatusCode)
 		return 0, ""
 	}
-	
+
 	var pointData struct {
 		Properties struct {
 			ForecastURL    string `json:"forecast"`
 			ObservationURL string `json:"observationStations"`
 		} `json:"properties"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&pointData); err != nil {
 		log.Printf("Failed to decode NWS point data: %v", err)
 		return 0, ""
 	}
-	
-	// Get the observation stations
+
 	stationsResp, err := client.Get(pointData.Properties.ObservationURL)
 	if err != nil {
 		log.Printf("Failed to get observation stations: %v", err)
 		return 0, ""
 	}
 	defer stationsResp.Body.Close()
-	
+
 	var stationsData struct {
 		Features []struct {
 			Properties struct {
@@ -1463,54 +1874,52 @@ func fetchCurrentWeather(lat, lon float64) (int, string) {
 			} `json:"properties"`
 		} `json:"features"`
 	}
-	
+
 	if err := json.NewDecoder(stationsResp.Body).Decode(&stationsData); err != nil {
 		log.Printf("Failed to decode stations data: %v", err)
 		return 0, ""
 	}
-	
+
 	if len(stationsData.Features) == 0 {
 		log.Printf("No observation stations found")
 		return 0, ""
 	}
-	
-	// Get latest observation from the first station
+
 	stationID := stationsData.Features[0].Properties.StationIdentifier
 	obsURL := fmt.Sprintf("https://api.weather.gov/stations/%s/observations/latest", stationID)
-	
+
 	obsResp, err := client.Get(obsURL)
 	if err != nil {
 		log.Printf("Failed to get observations: %v", err)
 		return 0, ""
 	}
 	defer obsResp.Body.Close()
-	
+
 	var obsData struct {
 		Properties struct {
 			Temperature struct {
-				Value float64 `json:"value"`
-				UnitCode string `json:"unitCode"`
+				Value    float64 `json:"value"`
+				UnitCode string  `json:"unitCode"`
 			} `json:"temperature"`
 			TextDescription string `json:"textDescription"`
 		} `json:"properties"`
 	}
-	
+
 	if err := json.NewDecoder(obsResp.Body).Decode(&obsData); err != nil {
 		log.Printf("Failed to decode observation data: %v", err)
 		return 0, ""
 	}
-	
-	// Convert temperature to Fahrenheit if needed
+
 	temp := obsData.Properties.Temperature.Value
 	if obsData.Properties.Temperature.UnitCode == "wmoUnit:degC" {
 		temp = temp*9/5 + 32
 	}
-	
+
 	conditions := obsData.Properties.TextDescription
 	if conditions == "" {
-		conditions = "Clear" // Default condition
+		conditions = "Clear"
 	}
-	
+
 	return int(temp), conditions
 }
 
