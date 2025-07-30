@@ -43,7 +43,7 @@ go run main.go
 ## Usage
 
 ```bash
-termiradar
+termidar
 ```
 
 ### Controls
@@ -60,7 +60,7 @@ termiradar
 
 ### Supported ZIP Codes
 
-termiradar works with any valid US ZIP code. Some examples:
+termidar works with any valid US ZIP code. Some examples:
 
 - `10001` - New York, NY
 - `60601` - Chicago, IL
@@ -73,7 +73,7 @@ termiradar works with any valid US ZIP code. Some examples:
 
 ## How It Works
 
-termiradar fetches real weather radar data from multiple sources:
+termidar fetches real weather radar data from multiple sources:
 
 1. **Iowa State University Mesonet** - NEXRAD radar imagery
 2. **RainViewer API** - Global precipitation data
@@ -95,7 +95,7 @@ The radar images are processed and converted to ASCII art for terminal display, 
 go mod download
 
 # Build binary
-go build -o termiradar
+go build -o termidar
 
 # Run tests
 go test ./...
