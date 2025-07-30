@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -1793,6 +1794,12 @@ func (m model) trackProgress() tea.Cmd {
 // Data loading
 func loadRadarData(zipCode string) tea.Cmd {
 	return func() tea.Msg {
+		// Create a custom logger that discards output during loading
+		// This prevents console spam from interfering with the display
+		oldOutput := log.Writer()
+		log.SetOutput(io.Discard)
+		defer log.SetOutput(oldOutput)
+		
 		lat, lon, city, state, err := geocodeZip(zipCode)
 		if err != nil {
 			return errorMsg{err: fmt.Errorf("failed to geocode ZIP: %w", err)}
