@@ -160,6 +160,7 @@ type model struct {
 	autoRefresh     bool
 	zipCode         string
 	animationActive bool
+	isBackgroundRefresh bool
 }
 
 // Messages
@@ -292,23 +293,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case radarLoadedMsg:
+		// oldRadar := m.radar
 		m.radar = msg.radar
-		m.state = stateDisplaying
-		m.currentFrame = 0
-		m.isPaused = false
-		m.lastRefresh = time.Now()
-
-		if !m.animationActive {
-			m.animationActive = true
-			cmds = append(cmds, m.animateFrame())
+		
+		// If this is a background refresh, preserve the animation state
+		if m.state == stateDisplaying && m.isBackgroundRefresh {
+			m.isBackgroundRefresh = false
+			m.lastRefresh = time.Now()
+			// Don't reset frame or pause state during background refresh
+			// Keep the animation running smoothly
+		} else {
+			// Normal load behavior
+			m.state = stateDisplaying
+			m.currentFrame = 0
+			m.isPaused = false
+			m.lastRefresh = time.Now()
+			
+			if !m.animationActive {
+				m.animationActive = true
+				cmds = append(cmds, m.animateFrame())
+			}
 		}
-
-		if m.autoRefresh {
+		
+		if m.autoRefresh && !m.isBackgroundRefresh {
 			cmds = append(cmds, m.scheduleRefresh())
 		}
 
 	case refreshTickMsg:
 		if m.state == stateDisplaying && m.autoRefresh && m.zipCode != "" {
+			// Don't show loading state during auto-refresh
+			// Just load the data in the background
 			cmds = append(cmds, loadRadarData(m.zipCode))
 			cmds = append(cmds, m.scheduleRefresh())
 		}
