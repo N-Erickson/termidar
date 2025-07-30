@@ -2,9 +2,12 @@
 
 A beautiful, real-time weather radar in your terminal. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
-![termiradar demo](demo.gif)
+
+https://github.com/user-attachments/assets/0969d801-d653-49ed-8358-672fde4269df
+
 
 ## Features
+
 
 - 🎯 **Real-time weather radar** - Fetches live NEXRAD data
 - 🌍 **ZIP code lookup** - Enter any US ZIP code
