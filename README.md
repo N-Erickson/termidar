@@ -2,14 +2,9 @@
 
 Real-time weather radar in your terminal!
 
-Updated video:
+Video:
 
-
-https://github.com/user-attachments/assets/0442c9d7-a3d9-4e64-814f-0a6037d88c2e
-
-
-https://github.com/user-attachments/assets/0969d801-d653-49ed-8358-672fde4269df
-
+https://github.com/user-attachments/assets/86537adf-1c31-4ebc-9bda-59b3e88fb57c
 
 ## Features
 
