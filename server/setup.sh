@@ -94,8 +94,9 @@ go get github.com/charmbracelet/ssh
 go get github.com/charmbracelet/wish
 go get github.com/charmbracelet/wish/activeterm
 go get github.com/charmbracelet/wish/bubbletea
+go get github.com/muesli/termenv
 
-# Create SSH server
+# Create SSH server with color support
 mkdir -p cmd/ssh
 cat > cmd/ssh/main.go << 'EOF'
 package main
@@ -113,10 +114,16 @@ import (
     "github.com/charmbracelet/wish"
     "github.com/charmbracelet/wish/activeterm"
     "github.com/charmbracelet/wish/bubbletea"
+    "github.com/charmbracelet/lipgloss"
+    "github.com/muesli/termenv"
+    
     "github.com/N-Erickson/termidar/internal/ui"
 )
 
 func main() {
+    // Force color output
+    lipgloss.SetColorProfile(termenv.ANSI256)
+    
     port := os.Getenv("TERMIDAR_PORT")
     if port == "" {
         port = "22"
@@ -129,14 +136,7 @@ func main() {
             return true
         }),
         wish.WithMiddleware(
-            bubbletea.Middleware(func(s ssh.Session) (tea.Model, []tea.ProgramOption) {
-                m := ui.InitialModel()
-                return m, []tea.ProgramOption{
-                    tea.WithAltScreen(),
-                    tea.WithInput(s),
-                    tea.WithOutput(s),
-                }
-            }),
+            bubbletea.Middleware(teaHandler),
             activeterm.Middleware(),
         ),
     )
@@ -147,7 +147,7 @@ func main() {
     done := make(chan os.Signal, 1)
     signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
     
-    log.Printf("Termidar SSH server started on port %s", port)
+    log.Printf("Termidar SSH server started on port %s with color support", port)
     
     go func() {
         if err = s.ListenAndServe(); err != nil {
@@ -159,6 +159,29 @@ func main() {
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
     s.Shutdown(ctx)
+}
+
+func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
+    // Get PTY info
+    pty, _, _ := s.Pty()
+    
+    // Force color environment
+    os.Setenv("COLORTERM", "truecolor")
+    if pty.Term != "" {
+        os.Setenv("TERM", pty.Term)
+    } else {
+        os.Setenv("TERM", "xterm-256color")
+    }
+    
+    m := ui.InitialModel()
+    
+    return m, []tea.ProgramOption{
+        tea.WithAltScreen(),
+        tea.WithInput(s),
+        tea.WithOutput(s),
+        tea.WithMouseCellMotion(),
+        tea.WithANSICompressor(),
+    }
 }
 EOF
 
@@ -217,8 +240,8 @@ if systemctl is-active --quiet termidar-ssh; then
     echo "✅ SUCCESS! Termidar is running!"
     echo "===================================="
     echo ""
-    echo "Termidar SSH is now on port 22"
-    echo "Users can connect: ssh your-domain.com"
+    echo "Termidar SSH is now on port 22 with full color support"
+    echo "Users can connect: ssh termidar.app"
     echo ""
     echo "For server management: ssh -p 2222 opc@your-ip"
     echo ""
