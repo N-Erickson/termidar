@@ -14,8 +14,6 @@ https://github.com/user-attachments/assets/86537adf-1c31-4ebc-9bda-59b3e88fb57c
 - 🎬 **Animated radar loop** - Watch weather patterns move
 - 🔄 **Auto-refresh** - Updates every 5 minutes
 - ⚡ **Interactive controls** - Play, pause, navigate frames
-- 🎨 **Beautiful TUI** - Smooth animations and styled interface
-- 📡 **Live radar sweep** - Authentic radar visualization
 - 🌈 **Precipitation intensity** - Color-coded from light to severe
 
 ## Installation
