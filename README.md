@@ -120,4 +120,4 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ---
 
-Made with ❤️ and ☕ using [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+
