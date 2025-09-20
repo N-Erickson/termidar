@@ -219,7 +219,7 @@ func (g *WeatherChannelGenerator) createChord(root int, quality ChordQuality) Ch
 		Quality: quality,
 	}
 
-	baseNote := 60 + root // Middle C + root
+	baseNote := 36 + root // PLEASANT LOW C2 + root (COMFORTABLE BASS RANGE)
 
 	switch quality {
 	case Major:
@@ -337,7 +337,7 @@ func (g *WeatherChannelGenerator) addSaxTrack(chords []Chord) {
 		if g.rand.Float32() < 0.4 {
 			phraseLength := beatDuration * time.Duration(2+g.rand.Intn(6))
 
-			note := scale.Notes[g.rand.Intn(len(scale.Notes))] + 58 // REAL tenor sax range: MIDI 58-74 (Bb3-D5)
+			note := scale.Notes[g.rand.Intn(len(scale.Notes))] + 48 // PLEASANT sax range: MIDI 60-72 (C4-C5) - PLEASANT MELODY RANGE
 			track.Notes = append(track.Notes, Note{
 				Pitch:    note,
 				Velocity: 60 + g.rand.Intn(35), // Much more dynamic range
@@ -413,7 +413,7 @@ func (g *WeatherChannelGenerator) addPadTrack(chords []Chord) {
 		// Long, sustained chord tones
 		for _, note := range chord.Notes {
 			track.Notes = append(track.Notes, Note{
-				Pitch:    note + 12, // ULTRA LOW pad range: MIDI 12-24 (C0-C1) - SUB-BASS RANGE
+				Pitch:    note + 24, // PLEASANT pad range: MIDI 60-72 (C4-C5) - PLEASANT BACKGROUND RANGE
 				Velocity: 40 + g.rand.Intn(20),
 				Duration: measureDuration,
 				Start:    currentTime,
@@ -466,11 +466,11 @@ func (g *WeatherChannelGenerator) addUpbeatPianoNotes(track *Track, chords []Cho
 	for currentTime < g.length {
 		chord := chords[int(currentTime/measureDuration)%len(chords)]
 
-		// ULTRA LOW piano left hand chord voicings (NO HIGH NOTES POSSIBLE)
+		// PLEASANT piano left hand chord voicings (comfortable bass range)
 		for i, note := range chord.Notes {
 			if i < 3 {
 				track.Notes = append(track.Notes, Note{
-					Pitch:    note + 24, // MIDI 24-36 (C1-C2) - ULTRA LOW BASS RANGE
+					Pitch:    note + 12, // MIDI 48-60 (C3-C4) - PLEASANT BASS RANGE
 					Velocity: 65 + g.rand.Intn(15),
 					Duration: beatDuration * 2,
 					Start:    currentTime + time.Duration(i)*beatDuration/8,
@@ -478,12 +478,12 @@ func (g *WeatherChannelGenerator) addUpbeatPianoNotes(track *Track, chords []Cho
 			}
 		}
 
-		// ULTRA LOW piano right hand melody (NO HIGH NOTES POSSIBLE)
+		// PLEASANT piano right hand melody (comfortable melody range)
 		scale := g.getScale()
 		melodyPattern := []int{0, 2, 4, 2, 0, 4, 6, 4}
 		for i, scaleStep := range melodyPattern {
 			if i < 6 {
-				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 36 // MIDI 36-48 (C2-C3) - ULTRA LOW BASS RANGE
+				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 48 // MIDI 60-72 (C4-C5) - PLEASANT MELODY RANGE
 				track.Notes = append(track.Notes, Note{
 					Pitch:    melodyNote,
 					Velocity: 70 + g.rand.Intn(15),
@@ -493,8 +493,8 @@ func (g *WeatherChannelGenerator) addUpbeatPianoNotes(track *Track, chords []Cho
 			}
 		}
 
-		// ULTRA DEEP bass line (NO HIGH NOTES POSSIBLE)
-		bassNote := chord.Notes[0] + 12 // MIDI 12-24 (C0-C1) - SUB-BASS RANGE
+		// PLEASANT bass line (comfortable bass range)
+		bassNote := chord.Notes[0] + 0 // MIDI 36-48 (C2-C3) - PLEASANT BASS RANGE
 		track.Notes = append(track.Notes, Note{
 			Pitch:    bassNote,
 			Velocity: 75,
@@ -512,11 +512,11 @@ func (g *WeatherChannelGenerator) addSmoothPianoNotes(track *Track, chords []Cho
 	for currentTime < g.length {
 		chord := chords[int(currentTime/measureDuration)%len(chords)]
 
-		// ULTRA LOW jazz piano left hand chord voicings (smooth jazz style)
+		// PLEASANT jazz piano left hand chord voicings (smooth jazz style)
 		for i, note := range chord.Notes {
 			if i < 3 {
 				track.Notes = append(track.Notes, Note{
-					Pitch:    note + 24, // MIDI 24-36 (C1-C2) - ULTRA LOW BASS RANGE
+					Pitch:    note + 12, // MIDI 48-60 (C3-C4) - PLEASANT BASS RANGE
 					Velocity: 55 + g.rand.Intn(15),
 					Duration: beatDuration * 3, // Longer sustain for smooth style
 					Start:    currentTime + time.Duration(i)*beatDuration/8,
@@ -524,12 +524,12 @@ func (g *WeatherChannelGenerator) addSmoothPianoNotes(track *Track, chords []Cho
 			}
 		}
 
-		// ULTRA LOW jazz piano right hand melody (smooth and flowing)
+		// PLEASANT jazz piano right hand melody (smooth and flowing)
 		scale := g.getScale()
 		melodyPattern := []int{0, 4, 2, 6, 4, 0}
 		for i, scaleStep := range melodyPattern {
 			if i < 4 {
-				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 36 // MIDI 36-48 (C2-C3) - ULTRA LOW BASS RANGE
+				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 48 // MIDI 60-72 (C4-C5) - PLEASANT MELODY RANGE
 				track.Notes = append(track.Notes, Note{
 					Pitch:    melodyNote,
 					Velocity: 50 + g.rand.Intn(20),
@@ -558,11 +558,11 @@ func (g *WeatherChannelGenerator) addGentlePianoNotes(track *Track, chords []Cho
 	for currentTime < g.length {
 		chord := chords[int(currentTime/measureDuration)%len(chords)]
 
-		// ULTRA LOW jazz piano left hand chord voicings (gentle jazz style)
+		// PLEASANT jazz piano left hand chord voicings (gentle jazz style)
 		for i, note := range chord.Notes {
 			if i < 3 {
 				track.Notes = append(track.Notes, Note{
-					Pitch:    note + 24, // MIDI 24-36 (C1-C2) - ULTRA LOW BASS RANGE
+					Pitch:    note + 12, // MIDI 48-60 (C3-C4) - PLEASANT BASS RANGE
 					Velocity: 45 + g.rand.Intn(15),
 					Duration: measureDuration, // Gentle sustained chords
 					Start:    currentTime + time.Duration(i)*beatDuration/6,
@@ -570,12 +570,12 @@ func (g *WeatherChannelGenerator) addGentlePianoNotes(track *Track, chords []Cho
 			}
 		}
 
-		// ULTRA LOW jazz piano right hand melody (simple and peaceful)
+		// PLEASANT jazz piano right hand melody (simple and peaceful)
 		scale := g.getScale()
 		melodyPattern := []int{0, 2, 4, 0, 6, 4, 2}
 		for i, scaleStep := range melodyPattern {
 			if i < 5 {
-				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 36 // MIDI 36-48 (C2-C3) - ULTRA LOW BASS RANGE
+				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 48 // MIDI 60-72 (C4-C5) - PLEASANT MELODY RANGE
 				track.Notes = append(track.Notes, Note{
 					Pitch:    melodyNote,
 					Velocity: 40 + g.rand.Intn(15),
@@ -604,13 +604,13 @@ func (g *WeatherChannelGenerator) addDrivingPianoNotes(track *Track, chords []Ch
 	for currentTime < g.length {
 		chord := chords[int(currentTime/measureDuration)%len(chords)]
 
-		// ULTRA LOW jazz piano left hand - driving rhythmic chord pattern
+		// PLEASANT jazz piano left hand - driving rhythmic chord pattern
 		rhythmBeats := []float64{0, 0.5, 1, 2, 2.5, 3}
 		for _, beat := range rhythmBeats {
 			noteIdx := g.rand.Intn(len(chord.Notes))
 			if noteIdx < 3 {
 				track.Notes = append(track.Notes, Note{
-					Pitch:    chord.Notes[noteIdx] + 24, // MIDI 24-36 (C1-C2) - ULTRA LOW BASS RANGE
+					Pitch:    chord.Notes[noteIdx] + 24, // MIDI 24-36 (C1-C2) - PLEASANT BASS RANGE
 					Velocity: 70 + g.rand.Intn(20),
 					Duration: beatDuration / 2,
 					Start:    currentTime + time.Duration(beat*float64(beatDuration)),
@@ -618,12 +618,12 @@ func (g *WeatherChannelGenerator) addDrivingPianoNotes(track *Track, chords []Ch
 			}
 		}
 
-		// ULTRA LOW jazz piano right hand - energetic melody
+		// PLEASANT jazz piano right hand - energetic melody
 		scale := g.getScale()
 		melodyPattern := []int{0, 4, 6, 4, 2, 6, 0}
 		for i, scaleStep := range melodyPattern {
 			if i < 6 {
-				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 36 // MIDI 36-48 (C2-C3) - ULTRA LOW BASS RANGE
+				melodyNote := scale.Notes[scaleStep%len(scale.Notes)] + 48 // MIDI 60-72 (C4-C5) - PLEASANT MELODY RANGE
 				track.Notes = append(track.Notes, Note{
 					Pitch:    melodyNote,
 					Velocity: 75 + g.rand.Intn(15),
