@@ -13,6 +13,7 @@ import (
 
 	"github.com/N-Erickson/termidar/internal/config"
 	"github.com/N-Erickson/termidar/internal/geography"
+	"github.com/N-Erickson/termidar/internal/music"
 	"github.com/N-Erickson/termidar/internal/radar"
 	"github.com/N-Erickson/termidar/internal/weather"
 )
@@ -46,6 +47,13 @@ type Model struct {
 	zipCode             string
 	animationActive     bool
 	isBackgroundRefresh bool
+	musicPlayer         music.Player
+	musicEnabled        bool
+	musicPlaying        bool
+	musicStartTime      time.Time
+	musicTracks         [][]music.Track // Multiple pregenerated tracks
+	currentTrack        int             // Index of current track
+	threadedAudio       *music.ThreadedAudioPlayer
 }
 
 // Messages
@@ -56,6 +64,13 @@ type ErrorMsg struct {
 	Err error
 }
 type ProgressMsg float64
+type MusicReadyMsg struct {
+	Player music.Player
+}
+type AudioReadyMsg struct {
+	AudioPlayer *music.AudioPlayer
+	Success     bool
+}
 
 // InitialModel creates and returns a new model
 func InitialModel() Model {
@@ -76,6 +91,41 @@ func InitialModel() Model {
 		progress.WithoutPercentage(),
 	)
 
+	// Pregenerate multiple diverse music tracks during startup
+	const numTracks = 5 // Generate 5 different tracks
+	musicTracks := make([][]music.Track, numTracks)
+
+	// Define 5 distinct video game style tracks
+	trackConfigs := []struct {
+		key       int
+		tempo     int
+		length    time.Duration
+		style     string
+		intensity float64
+	}{
+		{0, 120, time.Minute * 2, "upbeat", 0.8},     // Classic upbeat theme - memorable
+		{7, 100, time.Minute * 3, "smooth", 0.7},     // Smooth flowing theme - relaxed groove
+		{5, 90, time.Minute * 2, "gentle", 0.6},      // Gentle theme - peaceful, flowing
+		{2, 110, time.Minute * 3, "driving", 0.9},    // Driving theme - rhythmic, energetic
+		{9, 80, time.Minute * 4, "ambient", 0.5},     // Ambient theme - contemplative, steady
+	}
+
+	for i := 0; i < numTracks; i++ {
+		config := trackConfigs[i]
+		generator := music.NewWeatherChannelGenerator()
+		generator.SetKey(config.key)
+		generator.SetTempo(config.tempo)
+		generator.SetLength(config.length)
+		generator.SetStyle(config.style)
+		generator.SetIntensity(config.intensity)
+		generator.GenerateTrack()
+		musicTracks[i] = generator.GetTracks()
+	}
+
+	// Initialize threaded audio player (starts in background)
+	threadedAudio := music.NewThreadedAudioPlayer()
+	threadedAudio.SetTracks(musicTracks)
+
 	return Model{
 		state:           StateInput,
 		zipInput:        ti,
@@ -86,7 +136,33 @@ func InitialModel() Model {
 		frameRate:       300 * time.Millisecond,
 		autoRefresh:     true,
 		animationActive: false,
+		musicPlayer:   nil, // Initialize lazily
+		musicEnabled:  false,
+		musicPlaying:  false,
+		musicTracks:   musicTracks,
+		currentTrack:  0,
+		threadedAudio: threadedAudio,
 	}
+}
+
+// initAudioAsync - DISABLED to prevent freezing
+func (m *Model) initAudioAsync() tea.Cmd {
+	return func() tea.Msg {
+		// DISABLED: Audio initialization causes UI freeze
+		// Always return failure for now
+		return AudioReadyMsg{AudioPlayer: nil, Success: false}
+	}
+}
+
+// Close cleans up resources when the application exits
+func (m Model) Close() error {
+	if m.threadedAudio != nil {
+		return m.threadedAudio.Close()
+	}
+	if m.musicPlayer != nil {
+		return m.musicPlayer.Close()
+	}
+	return nil
 }
 
 // Init initializes the model
@@ -100,9 +176,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Handle global keys first (before state-specific processing)
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "m":
+			// Toggle pregenerated music with threaded audio
+			m.musicEnabled = !m.musicEnabled
+			if m.musicEnabled {
+				m.musicPlaying = true
+				m.musicStartTime = time.Now()
+				// Start audio in background thread (non-blocking)
+				if m.threadedAudio != nil {
+					m.threadedAudio.Play()
+				}
+			} else {
+				// Stop audio
+				if m.threadedAudio != nil {
+					m.threadedAudio.Stop()
+				}
+				m.musicPlaying = false
+			}
+			return m, nil
+		case "n":
+			// Skip to next pregenerated track
+			if m.musicEnabled && len(m.musicTracks) > 0 {
+				m.currentTrack = (m.currentTrack + 1) % len(m.musicTracks)
+				m.musicStartTime = time.Now() // Reset playback time
+				// Skip to next track in threaded audio
+				if m.threadedAudio != nil {
+					m.threadedAudio.Skip()
+				}
+			}
+			return m, nil
+		case "[":
+			// Volume down
+			if m.threadedAudio != nil {
+				volume := m.threadedAudio.GetVolume()
+				m.threadedAudio.SetVolume(volume - 0.1)
+			}
+			return m, nil
+		case "]":
+			// Volume up
+			if m.threadedAudio != nil {
+				volume := m.threadedAudio.GetVolume()
+				m.threadedAudio.SetVolume(volume + 0.1)
+			}
+			return m, nil
+		}
+
+		// Now handle state-specific keys
+		switch msg.String() {
 		case "esc":
 			if m.state == StateDisplaying || m.state == StateError {
 				m.animationActive = false
@@ -222,10 +346,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errorMsg = msg.Err.Error()
 		m.animationActive = false
 
-	case ErrorMsg:
-		m.state = StateError
-		m.errorMsg = msg.Err.Error()
-		m.animationActive = false
+	case AudioReadyMsg:
+		// No longer needed - threaded audio initializes automatically
+
 	}
 
 	if m.state == StateInput {
@@ -522,6 +645,44 @@ func (m Model) renderControls() string {
 		"[+/-] Speed",
 		"[ESC] New location",
 		"[Q] Quit",
+	}
+
+	// Add music controls
+	if m.musicEnabled {
+		musicStatus := "🎵 Music: ON"
+		if m.musicPlaying {
+			// Show current position
+			elapsed := time.Since(m.musicStartTime)
+			trackNum := m.currentTrack + 1
+			totalTracks := len(m.musicTracks)
+
+			// Show current track with audio status
+			audioStatus := "Simulation"
+			if m.threadedAudio != nil && m.threadedAudio.IsInitialized() {
+				if m.threadedAudio.IsPlaying() {
+					audioStatus = "Audio"
+				} else {
+					audioStatus = "Ready"
+				}
+			}
+			musicStatus = fmt.Sprintf("🎵 %s Track %d/%d %02d:%02d",
+				audioStatus, trackNum, totalTracks,
+				int(elapsed.Minutes()), int(elapsed.Seconds())%60)
+		}
+		volumeInfo := ""
+		if m.threadedAudio != nil {
+			volume := int(m.threadedAudio.GetVolume() * 100)
+			volumeInfo = fmt.Sprintf("[[ ]] Volume: %d%%", volume)
+		}
+		musicControls := []string{
+			musicStatus,
+			"[N] Skip tracks",
+			volumeInfo,
+			"Weather Channel style smooth jazz - 5 pregenerated tracks",
+		}
+		controls = append(controls, musicControls...)
+	} else {
+		controls = append(controls, "[M] Music: OFF")
 	}
 
 	if m.showHelp {

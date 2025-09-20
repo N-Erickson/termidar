@@ -10,8 +10,15 @@ import (
 
 
 func main() {
-	p := tea.NewProgram(ui.InitialModel(), tea.WithAltScreen())
+	model := ui.InitialModel()
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error: %v", err)
+	}
+
+	// Clean up resources
+	if err := model.Close(); err != nil {
+		fmt.Printf("Cleanup error: %v", err)
 	}
 }
