@@ -6,10 +6,26 @@ import (
 
 // Constants
 const (
-	RadarWidth  = 60
-	RadarHeight = 30
-	MaxFrames   = 20
+	RadarWidth     = 40 // minimum radar width
+	RadarHeight    = 15 // minimum radar height
+	MaxFrames      = 20
+	RadarChromeW   = 10 // AppStyle padding(4) + container border(2) + container padding(2) + margin(2)
+	RadarChromeH   = 24 // header + info panel + container chrome + dots/scale/legend + controls + forecast crawl
 )
+
+// EffectiveRadarSize computes the radar grid dimensions from terminal size.
+// Returns at least RadarWidth x RadarHeight.
+func EffectiveRadarSize(termW, termH int) (int, int) {
+	w := termW - RadarChromeW
+	h := termH - RadarChromeH
+	if w < RadarWidth {
+		w = RadarWidth
+	}
+	if h < RadarHeight {
+		h = RadarHeight
+	}
+	return w, h
+}
 
 // Styles
 var (
@@ -30,9 +46,9 @@ var (
 
 	TitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(PrimaryColor).
-			Background(lipgloss.Color("235")).
-			Padding(0, 1).
+			Foreground(RadarGreen).
+			Background(lipgloss.Color("233")).
+			Padding(0, 2).
 			MarginBottom(1)
 
 	SubtitleStyle = lipgloss.NewStyle().
@@ -53,7 +69,7 @@ var (
 	// Info panel styles
 	InfoPanelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("239")).
+			BorderForeground(lipgloss.Color("240")).
 			Padding(0, 1).
 			MarginTop(1)
 
@@ -64,9 +80,21 @@ var (
 	StationStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("245"))
 
+	// Custom radar border for instrument look
+	RadarBorder = lipgloss.Border{
+		Top:         "═",
+		Bottom:      "═",
+		Left:        "║",
+		Right:       "║",
+		TopLeft:     "╔",
+		TopRight:    "╗",
+		BottomLeft:  "╚",
+		BottomRight: "╝",
+	}
+
 	// Radar styles
 	RadarContainerStyle = lipgloss.NewStyle().
-				Border(lipgloss.DoubleBorder()).
+				Border(RadarBorder).
 				BorderForeground(RadarGreen).
 				Padding(1).
 				MarginTop(1)

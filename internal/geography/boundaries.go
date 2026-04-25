@@ -4,34 +4,26 @@ import (
 	"math"
 
 	"github.com/charmbracelet/lipgloss"
+)
 
-	"github.com/N-Erickson/termidar/internal/config"
-	"github.com/N-Erickson/termidar/internal/weather"
+// Cached styles (avoid re-creating on every frame)
+var (
+	boundaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	waterStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	mountainStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("94"))
+	borderStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	starStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
+	markerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 )
 
 // DrawGeographicBoundaries draws state borders, rivers, mountains, and coastlines on the radar display
-func DrawGeographicBoundaries(display [][]string, centerX, centerY int, zipCode string) {
-	// Get lat/lon to determine what features to draw
-	lat, lon, _, _, err := weather.GeocodeZip(zipCode)
-	if err != nil {
-		// If geocoding fails, just draw the center marker
-		if centerY >= 0 && centerY < len(display) && centerX >= 0 && centerX < len(display[0]) {
-			display[centerY][centerX] = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("226")).
-				Bold(true).
-				Render("★")
-		}
-		return
-	}
+func DrawGeographicBoundaries(display [][]string, centerX, centerY int, lat, lon, zoom float64) {
+	radarW := len(display[0])
+	radarH := len(display)
 
-	boundaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-	waterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	mountainStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("94"))
-	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-
-	// Scale: approximately 1 character = 4-5 miles
-	milesPerCharX := 250.0 / float64(config.RadarWidth)
-	milesPerCharY := 150.0 / float64(config.RadarHeight)
+	// Scale: approximately 1 character = 4-5 miles, adjusted by zoom
+	milesPerCharX := 250.0 / float64(radarW) / zoom
+	milesPerCharY := 150.0 / float64(radarH) / zoom
 
 	// Helper functions first
 	max := func(a, b int) int {
@@ -87,16 +79,16 @@ func DrawGeographicBoundaries(display [][]string, centerX, centerY int, zipCode 
 	// Safe line drawing function
 	drawLine := func(x1, y1, x2, y2 int, char string, style *lipgloss.Style, skipExisting bool) {
 		// Clip line to display bounds
-		if (x1 < 0 && x2 < 0) || (x1 >= config.RadarWidth && x2 >= config.RadarWidth) ||
-			(y1 < 0 && y2 < 0) || (y1 >= config.RadarHeight && y2 >= config.RadarHeight) {
+		if (x1 < 0 && x2 < 0) || (x1 >= radarW && x2 >= radarW) ||
+			(y1 < 0 && y2 < 0) || (y1 >= radarH && y2 >= radarH) {
 			return
 		}
 
 		// Simple clipping
-		x1 = max(0, min(config.RadarWidth-1, x1))
-		x2 = max(0, min(config.RadarWidth-1, x2))
-		y1 = max(0, min(config.RadarHeight-1, y1))
-		y2 = max(0, min(config.RadarHeight-1, y2))
+		x1 = max(0, min(radarW-1, x1))
+		x2 = max(0, min(radarW-1, x2))
+		y1 = max(0, min(radarH-1, y1))
+		y2 = max(0, min(radarH-1, y2))
 
 		if x1 == x2 { // Vertical line
 			if y1 > y2 {
@@ -871,19 +863,14 @@ func DrawGeographicBoundaries(display [][]string, centerX, centerY int, zipCode 
 
 	// Add city marker for the center (on top of everything)
 	if centerY >= 0 && centerY < len(display) && centerX >= 0 && centerX < len(display[0]) {
-		display[centerY][centerX] = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("226")).
-			Bold(true).
-			Render("★")
+		display[centerY][centerX] = starStyle.Render("★")
 	}
 }
 
 // DrawDistanceMarkers draws simple distance marker rings on the radar display
-func DrawDistanceMarkers(display [][]string, centerX, centerY int) {
-	markerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-
-	// 50 mile ring
-	radius := 12
+func DrawDistanceMarkers(display [][]string, centerX, centerY int, zoom float64) {
+	// 50 mile ring (scale radius by zoom)
+	radius := int(12.0 * zoom)
 	for angle := 0.0; angle < 360.0; angle += 10 {
 		x := int(float64(centerX) + float64(radius)*math.Cos(angle*math.Pi/180))
 		y := int(float64(centerY) + float64(radius)*math.Sin(angle*math.Pi/180))
@@ -896,7 +883,7 @@ func DrawDistanceMarkers(display [][]string, centerX, centerY int) {
 	}
 
 	// 100 mile ring
-	radius = 22
+	radius = int(22.0 * zoom)
 	for angle := 0.0; angle < 360.0; angle += 15 {
 		x := int(float64(centerX) + float64(radius)*math.Cos(angle*math.Pi/180))
 		y := int(float64(centerY) + float64(radius)*math.Sin(angle*math.Pi/180)*0.5)

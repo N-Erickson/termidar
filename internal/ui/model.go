@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -46,6 +47,11 @@ type Model struct {
 	zipCode             string
 	animationActive     bool
 	isBackgroundRefresh bool
+	geoOverlay          [][]string // cached geographic overlay (computed once per location)
+	sweepAngle          int        // radar sweep animation angle during loading
+	zoomLevel           float64    // zoom multiplier (1.0 = default, >1 = zoomed in)
+	mouseX, mouseY      int        // mouse position for hover inspection
+	hoverIntensity      int        // precipitation intensity at hover point (-1 = no hover)
 }
 
 // Messages
@@ -85,7 +91,9 @@ func InitialModel() Model {
 		height:          40,
 		frameRate:       300 * time.Millisecond,
 		autoRefresh:     true,
-		animationActive: false,
+		animationActive:  false,
+		zoomLevel:        1.0,
+		hoverIntensity:   -1,
 	}
 }
 
@@ -113,9 +121,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == StateInput && len(m.zipInput.Value()) == 5 {
 				m.state = StateLoading
 				m.zipCode = m.zipInput.Value()
+				rw, rh := config.EffectiveRadarSize(m.width, m.height)
 				cmds = append(cmds,
 					m.spinner.Tick,
-					radar.LoadData(m.zipCode),
+					radar.LoadData(m.zipCode, rw, rh),
 					m.TrackProgress(),
 				)
 			}
@@ -133,9 +142,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == StateDisplaying && m.zipCode != "" {
 				m.animationActive = false
 				m.state = StateLoading
+				rw, rh := config.EffectiveRadarSize(m.width, m.height)
 				cmds = append(cmds,
 					m.spinner.Tick,
-					radar.LoadData(m.zipCode),
+					radar.LoadData(m.zipCode, rw, rh),
 					m.TrackProgress(),
 				)
 			}
@@ -155,28 +165,70 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.frameRate < 2*time.Second {
 				m.frameRate += 100 * time.Millisecond
 			}
+		case "z":
+			if m.state == StateDisplaying && m.zoomLevel < 4.0 {
+				m.zoomLevel *= 1.5
+				m.computeGeoOverlay()
+			}
+		case "x":
+			if m.state == StateDisplaying && m.zoomLevel > 0.4 {
+				m.zoomLevel /= 1.5
+				m.computeGeoOverlay()
+			}
+		}
+
+	case tea.MouseMsg:
+		if m.state == StateDisplaying && msg.Action == tea.MouseActionMotion {
+			m.mouseX = msg.X
+			m.mouseY = msg.Y
+			// Approximate radar grid offset (accounting for borders, padding, chrome)
+			// Radar container has border(1) + padding(1) on each side = 4 chars offset
+			rw, rh := m.radarSize()
+			gridX := msg.X - 4
+			gridY := msg.Y - 10 // approximate offset for header + info panel
+			m.hoverIntensity = -1
+			if gridX >= 0 && gridX < rw && gridY >= 0 && gridY < rh &&
+				len(m.radar.Frames) > 0 && m.currentFrame < len(m.radar.Frames) {
+				frame := m.radar.Frames[m.currentFrame]
+				if gridY < len(frame.Data) && gridX < len(frame.Data[gridY]) {
+					m.hoverIntensity = frame.Data[gridY][gridX]
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.state == StateDisplaying && len(m.radar.Frames) > 0 {
+			m.computeGeoOverlay()
+		}
 
 	case spinner.TickMsg:
 		if m.state == StateLoading {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
+			m.sweepAngle = (m.sweepAngle + 30) % 360
 			cmds = append(cmds, cmd)
 		}
 
 	case ProgressMsg:
 		if m.state == StateLoading {
-			cmd := m.progress.SetPercent(float64(msg))
+			pct := float64(msg)
+			if pct > 0.9 {
+				pct = 0.9 // cap at 90% until data actually loads
+			}
+			cmd := m.progress.SetPercent(pct)
 			cmds = append(cmds, cmd)
+			if pct < 0.9 {
+				cmds = append(cmds, tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
+					return ProgressMsg(pct + 0.15)
+				}))
+			}
 		}
 
 	case radar.LoadedMsg:
-		// oldRadar := m.radar
 		m.radar = msg.Radar
+		m.computeGeoOverlay()
 
 		// If this is a background refresh, preserve the animation state
 		if m.state == StateDisplaying && m.isBackgroundRefresh {
@@ -205,7 +257,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == StateDisplaying && m.autoRefresh && m.zipCode != "" {
 			// Don't show loading state during auto-refresh
 			// Just load the data in the background
-			cmds = append(cmds, radar.LoadData(m.zipCode))
+			rw, rh := config.EffectiveRadarSize(m.width, m.height)
+			cmds = append(cmds, radar.LoadData(m.zipCode, rw, rh))
 			cmds = append(cmds, m.ScheduleRefresh())
 		}
 
@@ -286,7 +339,6 @@ func (m Model) renderInputBox() string {
 }
 
 func (m Model) renderLoading() string {
-	spinner := m.spinner.View()
 	progress := config.ProgressStyle.Render(m.progress.View())
 
 	messages := []string{
@@ -302,15 +354,72 @@ func (m Model) renderLoading() string {
 		messageIdx = len(messages) - 1
 	}
 
-	status := fmt.Sprintf("%s %s", spinner, messages[messageIdx])
+	// Mini radar sweep animation
+	sweep := m.renderRadarSweep()
+
+	status := lipgloss.NewStyle().Foreground(config.RadarGreen).Render(messages[messageIdx])
 
 	return lipgloss.JoinVertical(lipgloss.Center,
 		"",
+		sweep,
+		"",
 		status,
 		progress,
-		"",
-		config.SubtitleStyle.Render("Please wait..."),
 	)
+}
+
+func (m Model) renderRadarSweep() string {
+	size := 9 // 9x9 grid for the mini sweep
+	center := size / 2
+	sweepStyle := lipgloss.NewStyle().Foreground(config.RadarGreen)
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
+	brightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF66"))
+
+	var lines []string
+	for y := 0; y < size; y++ {
+		var line string
+		for x := 0; x < size; x++ {
+			dx := float64(x - center)
+			dy := float64(y-center) * 2 // compensate for char aspect ratio
+			dist := math.Sqrt(dx*dx + dy*dy)
+			angle := math.Atan2(dy, dx) * 180 / math.Pi
+			if angle < 0 {
+				angle += 360
+			}
+
+			if x == center && y == center {
+				line += brightStyle.Render("+")
+			} else if dist < 1.5 {
+				line += sweepStyle.Render("·")
+			} else if dist <= float64(center)+0.5 {
+				// Check if this point is on the sweep line
+				sweepAngle := float64(m.sweepAngle)
+				angleDiff := angle - sweepAngle
+				if angleDiff < 0 {
+					angleDiff += 360
+				}
+				if angleDiff > 180 {
+					angleDiff = 360 - angleDiff
+				}
+
+				if angleDiff < 15 {
+					line += brightStyle.Render("█")
+				} else if angleDiff < 40 {
+					line += sweepStyle.Render("▓")
+				} else if angleDiff < 70 {
+					line += sweepStyle.Render("░")
+				} else if int(dist+0.5) == center { // outer ring
+					line += dimStyle.Render("·")
+				} else {
+					line += " "
+				}
+			} else {
+				line += " "
+			}
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderRadar() string {
@@ -322,6 +431,47 @@ func (m Model) renderRadar() string {
 	radarDisplay := m.renderRadarFrame()
 
 	return lipgloss.JoinVertical(lipgloss.Left, info, radarDisplay)
+}
+
+func (m Model) renderForecastCrawl() string {
+	if len(m.radar.Forecast) == 0 {
+		return ""
+	}
+
+	labelStyle := lipgloss.NewStyle().Foreground(config.PrimaryColor).Bold(true)
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+
+	var parts []string
+	for _, p := range m.radar.Forecast {
+		tColor := lipgloss.Color("226")
+		if p.Temperature >= 90 {
+			tColor = lipgloss.Color("196")
+		} else if p.Temperature >= 70 {
+			tColor = lipgloss.Color("214")
+		} else if p.Temperature >= 50 {
+			tColor = lipgloss.Color("226")
+		} else if p.Temperature >= 32 {
+			tColor = lipgloss.Color("87")
+		} else {
+			tColor = lipgloss.Color("51")
+		}
+
+		name := p.Name
+		if len(name) > 8 {
+			name = name[:8]
+		}
+
+		short := p.ShortFcast
+		if len(short) > 15 {
+			short = short[:15]
+		}
+
+		temp := lipgloss.NewStyle().Foreground(tColor).Bold(true).Render(fmt.Sprintf("%d°", p.Temperature))
+		desc := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(short)
+		parts = append(parts, fmt.Sprintf("%s %s %s", name, temp, desc))
+	}
+
+	return labelStyle.Render("Forecast: ") + strings.Join(parts, sepStyle.Render(" │ "))
 }
 
 func (m Model) renderInfoPanel() string {
@@ -376,9 +526,11 @@ func (m Model) renderInfoPanel() string {
 	var frameInfo string
 	if len(m.radar.Frames) > 0 && m.currentFrame < len(m.radar.Frames) {
 		frame := m.radar.Frames[m.currentFrame]
+		localTime := frame.Timestamp.Local().Format("3:04 PM")
+		utcTime := frame.Timestamp.UTC().Format("15:04 UTC")
 		timeAgo := time.Since(frame.Timestamp).Round(time.Minute)
-		frameInfo = fmt.Sprintf("Frame %d/%d (%s ago)",
-			m.currentFrame+1, len(m.radar.Frames), timeAgo)
+		frameInfo = fmt.Sprintf("Frame %d/%d  %s (%s)  %s ago",
+			m.currentFrame+1, len(m.radar.Frames), localTime, utcTime, timeAgo)
 	} else {
 		frameInfo = fmt.Sprintf("Frame %d/%d", m.currentFrame+1, len(m.radar.Frames))
 	}
@@ -398,6 +550,13 @@ func (m Model) renderInfoPanel() string {
 		}
 	}
 
+	// Wind display
+	windDisplay := ""
+	if m.radar.Wind.Speed > 0 {
+		windStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
+		windDisplay = windStyle.Render(fmt.Sprintf("💨 %s %.0f mph", m.radar.Wind.Arrow, m.radar.Wind.Speed))
+	}
+
 	// Build the info panel
 	infoItems := []string{location, station}
 
@@ -407,6 +566,10 @@ func (m Model) renderInfoPanel() string {
 
 	if conditionEmoji != "" {
 		infoItems = append(infoItems, conditionEmoji)
+	}
+
+	if windDisplay != "" {
+		infoItems = append(infoItems, windDisplay)
 	}
 
 	topLine := strings.Join(infoItems, strings.Repeat(" ", 4))
@@ -425,28 +588,24 @@ func (m Model) renderInfoPanel() string {
 
 func (m Model) renderRadarFrame() string {
 	frame := m.radar.Frames[m.currentFrame]
+	rw, rh := m.radarSize()
 
-	// Create the radar display grid
-	display := make([][]string, config.RadarHeight)
+	// Copy the cached geographic overlay (computed once per location load)
+	display := make([][]string, rh)
 	for i := range display {
-		display[i] = make([]string, config.RadarWidth)
-		for j := range display[i] {
-			display[i][j] = " "
+		display[i] = make([]string, rw)
+		if i < len(m.geoOverlay) && len(m.geoOverlay[i]) == rw {
+			copy(display[i], m.geoOverlay[i])
+		} else {
+			for j := range display[i] {
+				display[i][j] = " "
+			}
 		}
 	}
 
-	// Get center coordinates from the radar station
-	centerX, centerY := config.RadarWidth/2, config.RadarHeight/2
-
-	// Draw geographic boundaries FIRST (so radar data appears on top)
-	geography.DrawGeographicBoundaries(display, centerX, centerY, m.zipCode)
-
-	// Draw simple distance markers
-	geography.DrawDistanceMarkers(display, centerX, centerY)
-
 	// Draw precipitation data
 	if frame.Data != nil {
-		m.DrawPrecipitation(display, frame.Data)
+		m.DrawPrecipitation(display, frame.Data, rw, rh)
 	}
 
 	// Add scale indicator
@@ -474,44 +633,70 @@ func (m Model) renderRadarFrame() string {
 	radarStr := strings.Join(lines, "\n")
 	radarStr += "\n" + lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
-		Width(config.RadarWidth).
+		Width(rw).
 		Align(lipgloss.Center).
 		Render(frameIndicator.String())
 	radarStr += "\n" + lipgloss.NewStyle().
 		Foreground(lipgloss.Color("239")).
-		Width(config.RadarWidth).
+		Width(rw).
 		Align(lipgloss.Center).
 		Render(scaleInfo)
+
+	// Radar legend
+	legend := m.renderLegend()
+	radarStr += "\n" + lipgloss.NewStyle().
+		Width(rw).
+		Align(lipgloss.Center).
+		Render(legend)
 
 	return config.RadarContainerStyle.Render(radarStr)
 }
 
-func (m Model) DrawPrecipitation(display [][]string, data [][]int) {
-	chars := []string{" ", "·", "∘", "○", "●", "◉", "◆", "◈", "▰", "▱", "█"}
-	colors := []lipgloss.Color{
-		lipgloss.Color("0"),
-		lipgloss.Color("51"),
-		lipgloss.Color("50"),
-		lipgloss.Color("49"),
-		lipgloss.Color("226"),
-		lipgloss.Color("220"),
-		lipgloss.Color("214"),
-		lipgloss.Color("208"),
-		lipgloss.Color("202"),
-		lipgloss.Color("196"),
-		lipgloss.Color("160"),
-	}
+// Pre-computed precipitation styled strings (avoids 1800 style allocations per frame)
+var precipRendered [11]string
 
-	for y := 0; y < len(data) && y < config.RadarHeight; y++ {
-		for x := 0; x < len(data[y]) && x < config.RadarWidth; x++ {
+func init() {
+	chars := []string{" ", "·", "∘", "○", "●", "◉", "◆", "◈", "▰", "▱", "█"}
+	// True color (24-bit) meteorological color ramp: green → yellow → orange → red → magenta
+	fgColors := []lipgloss.Color{
+		lipgloss.Color("#000000"), // 0: none
+		lipgloss.Color("#00E5CC"), // 1: light drizzle (cyan-teal)
+		lipgloss.Color("#00CC66"), // 2: light rain (green)
+		lipgloss.Color("#33CC33"), // 3: light-moderate (bright green)
+		lipgloss.Color("#66CC00"), // 4: moderate (yellow-green)
+		lipgloss.Color("#CCCC00"), // 5: heavy (yellow)
+		lipgloss.Color("#FF9900"), // 6: very heavy (orange)
+		lipgloss.Color("#FF6600"), // 7: severe (dark orange)
+		lipgloss.Color("#FF3300"), // 8: severe (red-orange)
+		lipgloss.Color("#FF0033"), // 9: extreme (red)
+		lipgloss.Color("#CC00FF"), // 10: extreme (magenta)
+	}
+	for i := range chars {
+		precipRendered[i] = lipgloss.NewStyle().Foreground(fgColors[i]).Render(chars[i])
+	}
+}
+
+func (m Model) DrawPrecipitation(display [][]string, data [][]int, rw, rh int) {
+	for y := 0; y < len(data) && y < rh; y++ {
+		for x := 0; x < len(data[y]) && x < rw; x++ {
 			intensity := data[y][x]
-			if intensity > 0 && intensity < len(chars) {
-				char := chars[intensity]
-				color := colors[intensity]
-				display[y][x] = lipgloss.NewStyle().Foreground(color).Render(char)
+			if intensity > 0 && intensity < len(precipRendered) {
+				display[y][x] = precipRendered[intensity]
 			}
 		}
 	}
+}
+
+func (m Model) renderLegend() string {
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	return labelStyle.Render("Light ") +
+		precipRendered[1] + precipRendered[2] + precipRendered[3] +
+		labelStyle.Render(" Moderate ") +
+		precipRendered[4] + precipRendered[5] + precipRendered[6] +
+		labelStyle.Render(" Heavy ") +
+		precipRendered[7] + precipRendered[8] +
+		labelStyle.Render(" Severe ") +
+		precipRendered[9] + precipRendered[10]
 }
 
 func (m Model) renderControls() string {
@@ -520,6 +705,7 @@ func (m Model) renderControls() string {
 		"[←/→] Previous/Next",
 		"[R] Refresh",
 		"[+/-] Speed",
+		"[Z/X] Zoom",
 		"[ESC] New location",
 		"[Q] Quit",
 	}
@@ -528,10 +714,30 @@ func (m Model) renderControls() string {
 		controls = append(controls, "",
 			fmt.Sprintf("Frame rate: %s", m.frameRate),
 			fmt.Sprintf("Auto-refresh: Every 5 minutes"),
+			fmt.Sprintf("Zoom: %.1fx", m.zoomLevel),
 		)
 	}
 
 	controlStr := config.HelpStyle.Render(strings.Join(controls, " • "))
+
+	// Hover tooltip
+	if m.hoverIntensity >= 0 {
+		labels := []string{"Clear", "Light Drizzle", "Light Rain", "Light-Mod", "Moderate",
+			"Heavy", "Very Heavy", "Severe", "Severe", "Extreme", "Extreme"}
+		label := "Clear"
+		if m.hoverIntensity < len(labels) {
+			label = labels[m.hoverIntensity]
+		}
+		hoverStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF66")).Bold(true)
+		controlStr += "  " + hoverStyle.Render(fmt.Sprintf("▸ %s (%d/10)", label, m.hoverIntensity))
+	}
+
+	// Forecast crawl line
+	forecastCrawl := m.renderForecastCrawl()
+	if forecastCrawl != "" {
+		controlStr += "\n" + forecastCrawl
+	}
+
 	return controlStr
 }
 
@@ -567,6 +773,27 @@ func (m Model) renderHelp() string {
 	return config.HelpStyle.Render("Press ? for help")
 }
 
+// computeGeoOverlay builds the geographic overlay grid once for the current location
+func (m *Model) computeGeoOverlay() {
+	rw, rh := m.radarSize()
+	overlay := make([][]string, rh)
+	for i := range overlay {
+		overlay[i] = make([]string, rw)
+		for j := range overlay[i] {
+			overlay[i][j] = " "
+		}
+	}
+	centerX, centerY := rw/2, rh/2
+	geography.DrawGeographicBoundaries(overlay, centerX, centerY, m.radar.Lat, m.radar.Lon, m.zoomLevel)
+	geography.DrawDistanceMarkers(overlay, centerX, centerY, m.zoomLevel)
+	m.geoOverlay = overlay
+}
+
+// radarSize returns the effective radar grid dimensions based on current terminal size
+func (m Model) radarSize() (int, int) {
+	return config.EffectiveRadarSize(m.width, m.height)
+}
+
 // Helper methods
 func (m Model) ResetToInput() Model {
 	m.state = StateInput
@@ -576,6 +803,7 @@ func (m Model) ResetToInput() Model {
 	m.zipInput.SetValue("")
 	m.zipInput.Focus()
 	m.animationActive = false
+	m.zoomLevel = 1.0
 	return m
 }
 
@@ -593,10 +821,7 @@ func (m Model) ScheduleRefresh() tea.Cmd {
 }
 
 func (m Model) TrackProgress() tea.Cmd {
-	return func() tea.Msg {
-		for i := 0; i <= 100; i += 10 {
-			time.Sleep(200 * time.Millisecond)
-		}
-		return nil
-	}
+	return tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
+		return ProgressMsg(m.progress.Percent() + 0.15)
+	})
 }
