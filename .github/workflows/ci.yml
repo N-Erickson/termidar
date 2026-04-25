@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
@@ -16,7 +17,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.24'
 
     - name: Get dependencies
       run: go mod download
@@ -27,64 +28,28 @@ jobs:
     - name: Run go vet
       run: go vet ./...
 
-  build:
-    name: Build
+  release:
+    name: Release
     runs-on: ubuntu-latest
     needs: test
-    strategy:
-      matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
-        exclude:
-          - goos: windows
-            goarch: arm64
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.24'
 
-    - name: Get dependencies
-      run: go mod download
-
-    - name: Build
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-      run: |
-        output_name='termidar-${{ matrix.goos }}-${{ matrix.goarch }}'
-        if [ "${{ matrix.goos }}" = "windows" ]; then
-          output_name+='.exe'
-        fi
-        go build -ldflags="-s -w" -o "bin/${output_name}" .
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+    - name: Run GoReleaser
+      uses: goreleaser/goreleaser-action@v6
       with:
-        name: termidar-${{ matrix.goos }}-${{ matrix.goarch }}
-        path: bin/
-
-  release:
-    name: Release
-    runs-on: ubuntu-latest
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: bin/
-        merge-multiple: true
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: bin/*
-        draft: false
-        prerelease: false
+        version: '~> v2'
+        args: release --clean
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
