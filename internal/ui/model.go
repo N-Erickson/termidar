@@ -52,6 +52,8 @@ type Model struct {
 	zoomLevel           float64    // zoom multiplier (1.0 = default, >1 = zoomed in)
 	mouseX, mouseY      int        // mouse position for hover inspection
 	hoverIntensity      int        // precipitation intensity at hover point (-1 = no hover)
+	forecastIdx         int        // current forecast period being displayed
+	forecastTick        int        // counter to slow forecast rotation vs frame rate
 }
 
 // Messages
@@ -265,6 +267,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FrameTickMsg:
 		if m.state == StateDisplaying && m.animationActive && !m.isPaused && len(m.radar.Frames) > 0 {
 			m.currentFrame = (m.currentFrame + 1) % len(m.radar.Frames)
+			// Rotate forecast every 6 frame ticks (~2s at default speed)
+			m.forecastTick++
+			if m.forecastTick >= 6 && len(m.radar.Forecast) > 0 {
+				m.forecastTick = 0
+				m.forecastIdx = (m.forecastIdx + 1) % len(m.radar.Forecast)
+			}
 			cmds = append(cmds, m.AnimateFrame())
 		} else {
 			m.animationActive = false
@@ -307,9 +315,7 @@ func (m Model) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, header, loadingView)
 
 	case StateDisplaying:
-		radarView := m.renderRadar()
-		controls := m.renderControls()
-		content = lipgloss.JoinVertical(lipgloss.Left, header, radarView, controls)
+		content = m.renderDisplaying(header)
 
 	case StateError:
 		errorView := m.renderError()
@@ -422,15 +428,159 @@ func (m Model) renderRadarSweep() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) renderRadar() string {
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+func (m Model) renderDisplaying(header string) string {
+	availH := m.height - 2 // AppStyle padding
+
+	// Always render all chrome — use compact forms when tight on space
+	compact := m.height < 30
+
+	// 1. Header (always)
+	hdr := header
+	used := countLines(hdr) + 1 // +1 for margin
+
+	// 2. Info — full panel or compact single line
+	var info string
+	if compact {
+		info = m.renderInfoCompact()
+	} else {
+		info = m.renderInfoPanel()
+	}
+	used += countLines(info)
+
+	// 3. Controls + forecast (always, 2 lines)
+	ctrl := m.renderControls()
+	used += countLines(ctrl)
+
+	// 4. Radar container chrome: border(2) + padding(2) + frame dots(1) = 5
+	containerChrome := 5
+	showExtras := false
+	if availH-used-containerChrome > 10 {
+		showExtras = true
+		containerChrome += 2 // scale + legend
+	}
+	used += containerChrome
+
+	radarH := availH - used
+	if radarH < 1 {
+		radarH = 1
+	}
+
+	radarView := m.renderRadarFrameSized(radarH, showExtras)
+
+	return lipgloss.JoinVertical(lipgloss.Left, hdr, info, radarView, ctrl)
+}
+
+// renderInfoCompact renders a single-line info bar for small terminals
+func (m Model) renderInfoCompact() string {
+	parts := []string{
+		config.LocationStyle.Render(m.radar.Location),
+		config.StationStyle.Render(m.radar.Station),
+	}
+
+	if m.radar.Temperature != 0 {
+		tempColor := lipgloss.Color("226")
+		if m.radar.Temperature >= 90 {
+			tempColor = lipgloss.Color("196")
+		} else if m.radar.Temperature >= 70 {
+			tempColor = lipgloss.Color("214")
+		} else if m.radar.Temperature >= 32 {
+			tempColor = lipgloss.Color("87")
+		} else if m.radar.Temperature < 32 {
+			tempColor = lipgloss.Color("51")
+		}
+		parts = append(parts, lipgloss.NewStyle().Foreground(tempColor).Bold(true).Render(fmt.Sprintf("%d°F", m.radar.Temperature)))
+	}
+
+	if m.radar.Wind.Speed > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Render(fmt.Sprintf("%s%.0fmph", m.radar.Wind.Arrow, m.radar.Wind.Speed)))
+	}
+
+	if len(m.radar.Frames) > 0 && m.currentFrame < len(m.radar.Frames) {
+		frame := m.radar.Frames[m.currentFrame]
+		t := frame.Timestamp.Local().Format("3:04PM")
+		parts = append(parts, config.HelpStyle.Render(fmt.Sprintf("F%d/%d %s", m.currentFrame+1, len(m.radar.Frames), t)))
+	}
+
+	return config.HelpStyle.Render(strings.Join(parts, "  "))
+}
+
+func (m Model) renderRadarFrameSized(radarH int, showExtras bool) string {
 	if len(m.radar.Frames) == 0 {
 		return "No radar data available"
 	}
 
-	info := m.renderInfoPanel()
-	radarDisplay := m.renderRadarFrame()
+	frame := m.radar.Frames[m.currentFrame]
+	rw := m.width - 8 // AppStyle padding(4) + container border(2) + container padding(2)
+	if rw < 5 {
+		rw = 5
+	}
+	rh := radarH
 
-	return lipgloss.JoinVertical(lipgloss.Left, info, radarDisplay)
+	// Copy the cached geographic overlay
+	display := make([][]string, rh)
+	for i := range display {
+		display[i] = make([]string, rw)
+		if i < len(m.geoOverlay) && len(m.geoOverlay[i]) == rw {
+			copy(display[i], m.geoOverlay[i])
+		} else {
+			for j := range display[i] {
+				display[i][j] = " "
+			}
+		}
+	}
+
+	// Draw precipitation data
+	if frame.Data != nil {
+		m.DrawPrecipitation(display, frame.Data, rw, rh)
+	}
+
+	// Add frame indicator dots
+	var frameIndicator strings.Builder
+	for i := 0; i < len(m.radar.Frames); i++ {
+		if i == m.currentFrame {
+			frameIndicator.WriteString("●")
+		} else {
+			frameIndicator.WriteString("·")
+		}
+		if i < len(m.radar.Frames)-1 {
+			frameIndicator.WriteString(" ")
+		}
+	}
+
+	// Convert to string
+	var lines []string
+	for _, row := range display {
+		lines = append(lines, strings.Join(row, ""))
+	}
+
+	radarStr := strings.Join(lines, "\n")
+	radarStr += "\n" + lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Width(rw).
+		Align(lipgloss.Center).
+		Render(frameIndicator.String())
+
+	if showExtras {
+		radarStr += "\n" + lipgloss.NewStyle().
+			Foreground(lipgloss.Color("239")).
+			Width(rw).
+			Align(lipgloss.Center).
+			Render("───── = 50 miles")
+
+		radarStr += "\n" + lipgloss.NewStyle().
+			Width(rw).
+			Align(lipgloss.Center).
+			Render(m.renderLegend())
+	}
+
+	return config.RadarContainerStyle.Render(radarStr)
 }
 
 func (m Model) renderForecastCrawl() string {
@@ -438,40 +588,44 @@ func (m Model) renderForecastCrawl() string {
 		return ""
 	}
 
+	idx := m.forecastIdx % len(m.radar.Forecast)
+	p := m.radar.Forecast[idx]
+
 	labelStyle := lipgloss.NewStyle().Foreground(config.PrimaryColor).Bold(true)
-	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	dotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 
-	var parts []string
-	for _, p := range m.radar.Forecast {
-		tColor := lipgloss.Color("226")
-		if p.Temperature >= 90 {
-			tColor = lipgloss.Color("196")
-		} else if p.Temperature >= 70 {
-			tColor = lipgloss.Color("214")
-		} else if p.Temperature >= 50 {
-			tColor = lipgloss.Color("226")
-		} else if p.Temperature >= 32 {
-			tColor = lipgloss.Color("87")
-		} else {
-			tColor = lipgloss.Color("51")
-		}
-
-		name := p.Name
-		if len(name) > 8 {
-			name = name[:8]
-		}
-
-		short := p.ShortFcast
-		if len(short) > 15 {
-			short = short[:15]
-		}
-
-		temp := lipgloss.NewStyle().Foreground(tColor).Bold(true).Render(fmt.Sprintf("%d°", p.Temperature))
-		desc := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(short)
-		parts = append(parts, fmt.Sprintf("%s %s %s", name, temp, desc))
+	tColor := lipgloss.Color("226")
+	if p.Temperature >= 90 {
+		tColor = lipgloss.Color("196")
+	} else if p.Temperature >= 70 {
+		tColor = lipgloss.Color("214")
+	} else if p.Temperature >= 50 {
+		tColor = lipgloss.Color("226")
+	} else if p.Temperature >= 32 {
+		tColor = lipgloss.Color("87")
+	} else {
+		tColor = lipgloss.Color("51")
 	}
 
-	return labelStyle.Render("Forecast: ") + strings.Join(parts, sepStyle.Render(" │ "))
+	temp := lipgloss.NewStyle().Foreground(tColor).Bold(true).Render(fmt.Sprintf("%d°%s", p.Temperature, p.TempUnit))
+
+	// Position dots
+	var dots strings.Builder
+	for i := 0; i < len(m.radar.Forecast); i++ {
+		if i == idx {
+			dots.WriteString("●")
+		} else {
+			dots.WriteString("·")
+		}
+	}
+
+	return labelStyle.Render("Forecast ") +
+		dotStyle.Render(dots.String()+" ") +
+		nameStyle.Render(p.Name) + " " +
+		temp + " " +
+		descStyle.Render(p.ShortFcast)
 }
 
 func (m Model) renderInfoPanel() string {
@@ -584,72 +738,6 @@ func (m Model) renderInfoPanel() string {
 	return config.InfoPanelStyle.Render(
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 	)
-}
-
-func (m Model) renderRadarFrame() string {
-	frame := m.radar.Frames[m.currentFrame]
-	rw, rh := m.radarSize()
-
-	// Copy the cached geographic overlay (computed once per location load)
-	display := make([][]string, rh)
-	for i := range display {
-		display[i] = make([]string, rw)
-		if i < len(m.geoOverlay) && len(m.geoOverlay[i]) == rw {
-			copy(display[i], m.geoOverlay[i])
-		} else {
-			for j := range display[i] {
-				display[i][j] = " "
-			}
-		}
-	}
-
-	// Draw precipitation data
-	if frame.Data != nil {
-		m.DrawPrecipitation(display, frame.Data, rw, rh)
-	}
-
-	// Add scale indicator
-	scaleInfo := "───── = 50 miles"
-
-	// Add frame indicator dots at bottom
-	var frameIndicator strings.Builder
-	for i := 0; i < len(m.radar.Frames); i++ {
-		if i == m.currentFrame {
-			frameIndicator.WriteString("●")
-		} else {
-			frameIndicator.WriteString("·")
-		}
-		if i < len(m.radar.Frames)-1 {
-			frameIndicator.WriteString(" ")
-		}
-	}
-
-	// Convert to string
-	var lines []string
-	for _, row := range display {
-		lines = append(lines, strings.Join(row, ""))
-	}
-
-	radarStr := strings.Join(lines, "\n")
-	radarStr += "\n" + lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Width(rw).
-		Align(lipgloss.Center).
-		Render(frameIndicator.String())
-	radarStr += "\n" + lipgloss.NewStyle().
-		Foreground(lipgloss.Color("239")).
-		Width(rw).
-		Align(lipgloss.Center).
-		Render(scaleInfo)
-
-	// Radar legend
-	legend := m.renderLegend()
-	radarStr += "\n" + lipgloss.NewStyle().
-		Width(rw).
-		Align(lipgloss.Center).
-		Render(legend)
-
-	return config.RadarContainerStyle.Render(radarStr)
 }
 
 // Pre-computed precipitation styled strings (avoids 1800 style allocations per frame)

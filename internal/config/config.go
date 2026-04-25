@@ -6,23 +6,36 @@ import (
 
 // Constants
 const (
-	RadarWidth     = 40 // minimum radar width
-	RadarHeight    = 15 // minimum radar height
-	MaxFrames      = 20
-	RadarChromeW   = 10 // AppStyle padding(4) + container border(2) + container padding(2) + margin(2)
-	RadarChromeH   = 24 // header + info panel + container chrome + dots/scale/legend + controls + forecast crawl
+	MaxFrames = 20
 )
 
 // EffectiveRadarSize computes the radar grid dimensions from terminal size.
-// Returns at least RadarWidth x RadarHeight.
+// Chrome is adaptive — elements hide at small sizes, so budget shrinks accordingly.
 func EffectiveRadarSize(termW, termH int) (int, int) {
-	w := termW - RadarChromeW
-	h := termH - RadarChromeH
-	if w < RadarWidth {
-		w = RadarWidth
+	// Horizontal: AppStyle padding(4) + container border(2) + container padding(2)
+	w := termW - 8
+
+	// Vertical: adaptive chrome based on what's shown at this height
+	chrome := 6 // container border(2) + container padding(2) + frame dots(1) + AppStyle padding(1)
+	if termH > 15 {
+		chrome += 2 // controls + forecast crawl
 	}
-	if h < RadarHeight {
-		h = RadarHeight
+	if termH > 20 {
+		chrome += 3 // header + margin
+	}
+	if termH > 25 {
+		chrome += 6 // info panel
+	}
+	if termH > 30 {
+		chrome += 2 // scale + legend
+	}
+	h := termH - chrome
+
+	if w < 5 {
+		w = 5
+	}
+	if h < 3 {
+		h = 3
 	}
 	return w, h
 }
@@ -98,10 +111,6 @@ var (
 				BorderForeground(RadarGreen).
 				Padding(1).
 				MarginTop(1)
-
-	RadarFrameStyle = lipgloss.NewStyle().
-			Width(RadarWidth).
-			Height(RadarHeight)
 
 	// Status styles
 	ErrorStyle = lipgloss.NewStyle().
