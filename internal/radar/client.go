@@ -28,6 +28,12 @@ type Data struct {
 	Temperature int
 	Conditions  string
 	Alerts      []weather.Alert
+	Lat         float64
+	Lon         float64
+	RadarW      int // actual radar grid width used
+	RadarH      int // actual radar grid height used
+	Wind        weather.WindData
+	Forecast    []weather.ForecastPeriod
 }
 
 // Frame represents a single radar frame
@@ -47,7 +53,7 @@ type ErrorMsg struct {
 }
 
 // LoadData loads radar data for a given ZIP code
-func LoadData(zipCode string) tea.Cmd {
+func LoadData(zipCode string, radarW, radarH int) tea.Cmd {
 	return func() tea.Msg {
 		// Create a custom logger that discards output during loading
 		// This prevents console spam from interfering with the display
@@ -65,12 +71,13 @@ func LoadData(zipCode string) tea.Cmd {
 			return ErrorMsg{Err: fmt.Errorf("failed to get radar station: %w", err)}
 		}
 
-		temperature, conditions := weather.FetchCurrentConditions(lat, lon)
+		temperature, conditions, wind := weather.FetchCurrentConditions(lat, lon)
 		alerts := weather.FetchAlerts(lat, lon)
+		forecast := weather.FetchForecast(lat, lon)
 
-		frames, isRealData, err := fetchRealRadarData(station, lat, lon)
+		frames, isRealData, err := fetchRealRadarData(station, lat, lon, radarW, radarH)
 		if err != nil {
-			frames = generateRadarFrames(station, config.MaxFrames)
+			frames = generateRadarFrames(station, config.MaxFrames, radarW, radarH)
 			isRealData = false
 		}
 
@@ -86,17 +93,23 @@ func LoadData(zipCode string) tea.Cmd {
 				Temperature: temperature,
 				Conditions:  conditions,
 				Alerts:      alerts,
+				Lat:         lat,
+				Lon:         lon,
+				RadarW:      radarW,
+				RadarH:      radarH,
+				Wind:        wind,
+				Forecast:    forecast,
 			},
 		}
 	}
 }
 
-func fetchRealRadarData(station string, lat, lon float64) ([]Frame, bool, error) {
+func fetchRealRadarData(station string, lat, lon float64, radarW, radarH int) ([]Frame, bool, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	frames := []Frame{}
 
 	// First try RainViewer
-	frames, err := fetchFromRainViewer(lat, lon)
+	frames, err := fetchFromRainViewer(lat, lon, radarW, radarH)
 	if err == nil && len(frames) > 0 {
 		log.Printf("Successfully fetched %d frames from RainViewer", len(frames))
 		return frames, true, nil
@@ -115,7 +128,7 @@ func fetchRealRadarData(station string, lat, lon float64) ([]Frame, bool, error)
 
 		timeStr := frameTime.Format("200601021504")
 		radarURL := fmt.Sprintf("https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=true&LAYERS=nexrad-n0r&WIDTH=%d&HEIGHT=%d&SRS=EPSG:4326&BBOX=%f,%f,%f,%f&TIME=%s",
-			config.RadarWidth*4, config.RadarHeight*4,
+			radarW*4, radarH*4,
 			lon-2.5, lat-2.0, lon+2.5, lat+2.0,
 			timeStr,
 		)
@@ -124,18 +137,19 @@ func fetchRealRadarData(station string, lat, lon float64) ([]Frame, bool, error)
 		if err != nil {
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			continue
 		}
 
 		img, err := png.Decode(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			continue
 		}
 
-		data := imageToRadarData(img)
+		data := imageToRadarData(img, radarW, radarH)
 		if data != nil {
 			frame := Frame{
 				Data:      data,
@@ -164,7 +178,7 @@ func fetchRealRadarData(station string, lat, lon float64) ([]Frame, bool, error)
 	return frames, true, nil
 }
 
-func fetchFromRainViewer(lat, lon float64) ([]Frame, error) {
+func fetchFromRainViewer(lat, lon float64, radarW, radarH int) ([]Frame, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	resp, err := client.Get("https://api.rainviewer.com/public/weather-maps.json")
@@ -203,14 +217,14 @@ func fetchFromRainViewer(lat, lon float64) ([]Frame, error) {
 		if err != nil {
 			continue
 		}
-		defer resp.Body.Close()
 
 		img, err := png.Decode(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			continue
 		}
 
-		data := imageToRadarData(img)
+		data := imageToRadarData(img, radarW, radarH)
 		if data != nil {
 			frame := Frame{
 				Data:      data,
@@ -236,22 +250,22 @@ func latLonToTile(lat, lon float64, zoom int) (int, int) {
 	return x, y
 }
 
-func imageToRadarData(img image.Image) [][]int {
+func imageToRadarData(img image.Image, radarW, radarH int) [][]int {
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	data := make([][]int, config.RadarHeight)
+	data := make([][]int, radarH)
 	for i := range data {
-		data[i] = make([]int, config.RadarWidth)
+		data[i] = make([]int, radarW)
 	}
 
 	foundPrecipitation := false
 
-	for y := 0; y < config.RadarHeight; y++ {
-		for x := 0; x < config.RadarWidth; x++ {
-			imgX := x * width / config.RadarWidth
-			imgY := y * height / config.RadarHeight
+	for y := 0; y < radarH; y++ {
+		for x := 0; x < radarW; x++ {
+			imgX := x * width / radarW
+			imgY := y * height / radarH
 
 			c := img.At(imgX, imgY)
 			r, g, b, a := c.RGBA()
@@ -303,25 +317,25 @@ func imageToRadarData(img image.Image) [][]int {
 	return data
 }
 
-func generateRadarFrames(station string, count int) []Frame {
+func generateRadarFrames(station string, count, radarW, radarH int) []Frame {
 	frames := make([]Frame, count)
 
 	for i := 0; i < count; i++ {
-		data := make([][]int, config.RadarHeight)
+		data := make([][]int, radarH)
 		for y := range data {
-			data[y] = make([]int, config.RadarWidth)
+			data[y] = make([]int, radarW)
 		}
 
 		numCells := 2 + i%3
 		for c := 0; c < numCells; c++ {
-			centerX := 10 + (i*3+c*15)%config.RadarWidth
-			centerY := 5 + (i*2+c*10)%config.RadarHeight
+			centerX := 10 + (i*3+c*15)%radarW
+			centerY := 5 + (i*2+c*10)%radarH
 			intensity := 5 + c*2
 
 			for dy := -5; dy <= 5; dy++ {
 				for dx := -5; dx <= 5; dx++ {
 					x, y := centerX+dx, centerY+dy
-					if x >= 0 && x < config.RadarWidth && y >= 0 && y < config.RadarHeight {
+					if x >= 0 && x < radarW && y >= 0 && y < radarH {
 						dist := math.Sqrt(float64(dx*dx + dy*dy))
 						if dist < 5 {
 							data[y][x] = intensity - int(dist)
