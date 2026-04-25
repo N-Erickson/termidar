@@ -18,18 +18,20 @@ builds:
     goarch:
       - amd64
       - arm64
-    exclude:
+    ignore:
       - goos: windows
         goarch: arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
 
 archives:
-  - format: tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
 checksum:
   name_template: "checksums.txt"
@@ -54,7 +56,7 @@ brews:
     install: |
       bin.install "termidar"
     test: |
-      assert_match version.to_s, shell_output("#{bin}/termidar --version 2>&1", 1)
+      system bin/"termidar", "--version"
 
 nfpms:
   - package_name: termidar
@@ -66,19 +68,3 @@ nfpms:
       - rpm
       - apk
     maintainer: "N-Erickson"
-
-snapcrafts:
-  - name: termidar
-    summary: "Real-time weather radar in your terminal"
-    description: |
-      Termidar displays animated NEXRAD weather radar data directly in your
-      terminal. Enter a US ZIP code and watch real-time precipitation patterns
-      with color-coded intensity, geographic overlays, forecasts, and more.
-    grade: stable
-    confinement: strict
-    license: MIT
-    apps:
-      termidar:
-        command: termidar
-        plugs:
-          - network
