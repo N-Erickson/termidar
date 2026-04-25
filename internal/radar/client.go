@@ -10,6 +10,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -71,11 +72,39 @@ func LoadData(zipCode string, radarW, radarH int) tea.Cmd {
 			return ErrorMsg{Err: fmt.Errorf("failed to get radar station: %w", err)}
 		}
 
-		temperature, conditions, wind := weather.FetchCurrentConditions(lat, lon)
-		alerts := weather.FetchAlerts(lat, lon)
-		forecast := weather.FetchForecast(lat, lon)
+		// Fetch weather data and radar frames in parallel
+		var temperature int
+		var conditions string
+		var wind weather.WindData
+		var alerts []weather.Alert
+		var forecast []weather.ForecastPeriod
+		var frames []Frame
+		var isRealData bool
+		var radarErr error
 
-		frames, isRealData, err := fetchRealRadarData(station, lat, lon, radarW, radarH)
+		var wg sync.WaitGroup
+		wg.Add(4)
+
+		go func() {
+			defer wg.Done()
+			temperature, conditions, wind = weather.FetchCurrentConditions(lat, lon)
+		}()
+		go func() {
+			defer wg.Done()
+			alerts = weather.FetchAlerts(lat, lon)
+		}()
+		go func() {
+			defer wg.Done()
+			forecast = weather.FetchForecast(lat, lon)
+		}()
+		go func() {
+			defer wg.Done()
+			frames, isRealData, radarErr = fetchRealRadarData(station, lat, lon, radarW, radarH)
+		}()
+
+		wg.Wait()
+
+		err = radarErr
 		if err != nil {
 			frames = generateRadarFrames(station, config.MaxFrames, radarW, radarH)
 			isRealData = false
@@ -115,63 +144,80 @@ func fetchRealRadarData(station string, lat, lon float64, radarW, radarH int) ([
 		return frames, true, nil
 	}
 
-	// Fallback to Iowa State University
+	// Fallback to Iowa State University — fetch frames in parallel
 	baseTime := time.Now().UTC()
+	numToFetch := config.MaxFrames
 
-	for i := 0; i < 24; i++ {
-		frameTime := baseTime.Add(time.Duration(-i*5) * time.Minute)
+	type indexedFrame struct {
+		index int
+		frame Frame
+	}
 
-		minutes := frameTime.Minute()
-		minutes = (minutes / 5) * 5
-		frameTime = time.Date(frameTime.Year(), frameTime.Month(), frameTime.Day(),
-			frameTime.Hour(), minutes, 0, 0, time.UTC)
+	var wg sync.WaitGroup
+	resultCh := make(chan indexedFrame, numToFetch)
 
-		timeStr := frameTime.Format("200601021504")
-		radarURL := fmt.Sprintf("https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=true&LAYERS=nexrad-n0r&WIDTH=%d&HEIGHT=%d&SRS=EPSG:4326&BBOX=%f,%f,%f,%f&TIME=%s",
-			radarW*4, radarH*4,
-			lon-2.5, lat-2.0, lon+2.5, lat+2.0,
-			timeStr,
-		)
+	for i := 0; i < numToFetch; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			frameTime := baseTime.Add(time.Duration(-idx*5) * time.Minute)
+			minutes := frameTime.Minute()
+			minutes = (minutes / 5) * 5
+			frameTime = time.Date(frameTime.Year(), frameTime.Month(), frameTime.Day(),
+				frameTime.Hour(), minutes, 0, 0, time.UTC)
 
-		resp, err := client.Get(radarURL)
-		if err != nil {
-			continue
-		}
+			timeStr := frameTime.Format("200601021504")
+			radarURL := fmt.Sprintf("https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=true&LAYERS=nexrad-n0r&WIDTH=%d&HEIGHT=%d&SRS=EPSG:4326&BBOX=%f,%f,%f,%f&TIME=%s",
+				radarW*4, radarH*4,
+				lon-2.5, lat-2.0, lon+2.5, lat+2.0,
+				timeStr,
+			)
 
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			continue
-		}
-
-		img, err := png.Decode(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			continue
-		}
-
-		data := imageToRadarData(img, radarW, radarH)
-		if data != nil {
-			frame := Frame{
-				Data:      data,
-				Timestamp: frameTime,
-				Product:   "N0R",
+			resp, err := client.Get(radarURL)
+			if err != nil {
+				return
 			}
-			frames = append(frames, frame)
-		}
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				return
+			}
+			img, err := png.Decode(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				return
+			}
 
-		if len(frames) >= config.MaxFrames {
-			break
+			data := imageToRadarData(img, radarW, radarH)
+			if data != nil {
+				resultCh <- indexedFrame{index: idx, frame: Frame{
+					Data:      data,
+					Timestamp: frameTime,
+					Product:   "N0R",
+				}}
+			}
+		}(i)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// Collect results
+	collected := make(map[int]Frame)
+	for r := range resultCh {
+		collected[r.index] = r.frame
+	}
+
+	// Reassemble in chronological order (oldest first)
+	for i := numToFetch - 1; i >= 0; i-- {
+		if f, ok := collected[i]; ok {
+			frames = append(frames, f)
 		}
 	}
 
 	if len(frames) == 0 {
 		return nil, false, fmt.Errorf("no radar data available")
-	}
-
-	// Reverse frames so oldest is first
-	for i := len(frames)/2 - 1; i >= 0; i-- {
-		opp := len(frames) - 1 - i
-		frames[i], frames[opp] = frames[opp], frames[i]
 	}
 
 	log.Printf("Successfully fetched %d frames from Iowa State", len(frames))
