@@ -1,42 +1,23 @@
-# termidar 🌦️
+# Termidar
 
-Real-time weather radar in your terminal!
-
-Video:
+Real-time weather radar in your terminal.
 
 https://github.com/user-attachments/assets/86537adf-1c31-4ebc-9bda-59b3e88fb57c
 
-## Features
-
-
-- 🎯 **Real-time weather radar** - Fetches live NEXRAD data
-- 🌍 **ZIP code lookup** - Enter any US ZIP code
-- 🎬 **Animated radar loop** - Watch weather patterns move
-- 🔄 **Auto-refresh** - Updates every 5 minutes
-- ⚡ **Interactive controls** - Play, pause, navigate frames
-- 🌈 **Precipitation intensity** - Color-coded from light to severe
-
-## Installation
-
-### From Source
+## Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/N-Erickson/termidar.git
-cd termiradar
+# macOS / Linux (one-liner)
+curl -sSfL https://raw.githubusercontent.com/N-Erickson/termidar/main/install.sh | sh
 
-# Build and install
-go install
+# Homebrew
+brew install N-Erickson/tap/termidar
 
-# Or run directly
-go run main.go
+# Go
+go install github.com/N-Erickson/termidar@latest
 ```
 
-### Requirements
-
-- Go 1.19 or higher
-- Terminal with Unicode support
-- Internet connection for radar data
+Pre-built binaries for Linux (.deb, .rpm, .apk), macOS, and Windows are available on the [releases page](https://github.com/N-Erickson/termidar/releases).
 
 ## Usage
 
@@ -44,80 +25,48 @@ go run main.go
 termidar
 ```
 
-### Controls
+Enter a US ZIP code to view live animated radar for that location.
+
+## Controls
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Submit ZIP code |
-| `Space` | Play/Pause animation |
-| `←` / `→` | Previous/Next frame |
-| `+` / `-` | Increase/Decrease speed |
-| `R` | Refresh radar data |
-| `ESC` | Return to ZIP input |
+| `Space` | Play / Pause |
+| `←` `→` | Previous / Next frame |
+| `+` `-` | Speed up / Slow down |
+| `Z` `X` | Zoom in / Zoom out |
+| `R` | Refresh data |
+| `?` | Toggle help |
+| `ESC` | New location |
 | `Q` | Quit |
 
-### Supported ZIP Codes
+Mouse hover over the radar to inspect precipitation intensity.
 
-termidar works with any valid US ZIP code. Some examples:
+## Features
 
-- `10001` - New York, NY
-- `60601` - Chicago, IL
-- `98101` - Seattle, WA
-- `33101` - Miami, FL
-- `90210` - Beverly Hills, CA
-- `02108` - Boston, MA
-- `75201` - Dallas, TX
-- `80202` - Denver, CO
+- Live NEXRAD radar data with animated frame playback
+- 160+ radar stations covering the full US
+- True color precipitation display with intensity legend
+- Geographic overlays — state borders, rivers, mountains, coastlines
+- Current temperature, wind speed/direction, and weather conditions
+- Rotating 6-period NWS forecast
+- Severe weather alerts with visual indicators
+- Zoom in/out on the radar view
+- Fully responsive — adapts to any terminal size
+- Auto-refresh every 5 minutes
 
-## How It Works
+## Data Sources
 
-termidar fetches real weather radar data from multiple sources:
+- [RainViewer](https://www.rainviewer.com) — precipitation composites
+- [Iowa State Mesonet](https://mesonet.agron.iastate.edu/) — NEXRAD imagery
+- [National Weather Service](https://www.weather.gov) — conditions, forecasts, alerts
 
-1. **Iowa State University Mesonet** - NEXRAD radar imagery
-2. **RainViewer API** - Global precipitation data
-3. **NWS API** - Radar station information
+## Requirements
 
-The radar images are processed and converted to ASCII art for terminal display, with color-coded precipitation intensity:
-
-- 🟢 Light precipitation
-- 🟡 Moderate precipitation
-- 🟠 Heavy precipitation
-- 🔴 Severe precipitation
-
-## Development
-
-### Building
-
-```bash
-# Get dependencies
-go mod download
-
-# Build binary
-go build -o termidar
-
-# Run tests
-go test ./...
-```
-
-### Architecture
-
-- **Bubble Tea** - Terminal UI framework
-- **Lipgloss** - Styling and layout
-- **Image processing** - Converts radar PNGs to terminal display
-- **Concurrent updates** - Separate timers for animation, sweep, and refresh
-
+- Terminal with Unicode and 256-color support (most modern terminals)
+- Internet connection
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details
-
-## Acknowledgments
-
-- [Charm](https://charm.sh) for the amazing Bubble Tea framework
-- [Iowa State University](https://mesonet.agron.iastate.edu/) for radar data access
-- [RainViewer](https://www.rainviewer.com/api.html) for precipitation API
-- [National Weather Service](https://www.weather.gov) for weather data
-
----
-
-
+[MIT](LICENSE)
