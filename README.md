@@ -2,7 +2,7 @@
 
 Real-time weather radar in your terminal.
 
-https://github.com/user-attachments/assets/86537adf-1c31-4ebc-9bda-59b3e88fb57c
+https://github.com/user-attachments/assets/71190f33-b350-414d-9a91-89fb3efd6e3a
 
 ## Install
 
